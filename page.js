@@ -25,6 +25,8 @@ const Address = 'Address';
 //            to store last geocoded Address. Enables map widget
 //            to automatically update the geocoding if Address is changed
 const GeocodedAddress = 'GeocodedAddress';
+// Optional - column with color code (e.g. "#FF0000", "red") for GeoJSON features
+const Color = 'Color';
 let lastRecord;
 let lastRecords;
 
@@ -192,6 +194,7 @@ function getInfo(rec) {
     lng: parseValue(rec[Longitude]),
     lat: parseValue(rec[Latitude]),
     geojson: parseValue(rec[GeoJSON]),
+    color: Color in rec ? parseValue(rec[Color]) : null,
   };
   return result;
 }
@@ -255,6 +258,7 @@ let clearGeoJSONLayers = () => {};
 
 let markers = [];
 let geoJSONLayers = {};
+let geoJSONColors = {};
 let geoJSONGroup = null;
 
 function updateMap(data, mappings) {
@@ -324,13 +328,14 @@ function updateMap(data, mappings) {
 
   popups = {}; // Map: {[rowid]: L.marker or L.geoJSON layer}
   geoJSONLayers = {};
+  geoJSONColors = {};
 
   if (isGeoJSONMode) {
     // GeoJSON mode
     geoJSONGroup = L.featureGroup();
 
     for (const rec of data) {
-      const { id, name, geojson } = getInfo(rec);
+      const { id, name, geojson, color } = getInfo(rec);
 
       if (!geojson) {
         continue;
@@ -348,12 +353,16 @@ function updateMap(data, mappings) {
       // Extract points for bounds
       points.push(...extractPointsFromGeoJSON(parsedGeoJSON));
 
+      // Store color for this feature (used when toggling selection)
+      if (color) { geoJSONColors[id] = color; }
+
       // Create GeoJSON layer
+      const colorStyle = color ? { color: color, fillColor: color } : {};
       const layer = L.geoJSON(parsedGeoJSON, {
-        style: {
+        style: Object.assign({
           opacity: id == selectedRowId ? 0.6 : 0.3,
           fillOpacity: id == selectedRowId ? 0.6 : 0.3,
-        },
+        }, colorStyle),
         pointToLayer: function (feature, latlng) {
           return L.marker(latlng, {
             icon: id == selectedRowId ? selectedIcon : defaultIcon,
@@ -468,10 +477,12 @@ function clearPopupMarker() {
       marker.pane = "otherMarkers";
     } else {
       // It's a GeoJSON layer
-      marker.setStyle({
+      const prevColor = geoJSONColors[selectedRowId];
+      const prevColorStyle = prevColor ? { color: prevColor, fillColor: prevColor } : {};
+      marker.setStyle(Object.assign({
         opacity: 0.3,
         fillOpacity: 0.3,
-      });
+      }, prevColorStyle));
     }
   }
 }
@@ -506,10 +517,12 @@ function selectGeoJSONFeature(id) {
   // Reset opacity for previously selected feature
   const previouslyClicked = geoJSONLayers[selectedRowId];
   if (previouslyClicked) {
-    previouslyClicked.setStyle({
+    const prevColor = geoJSONColors[selectedRowId];
+    const prevColorStyle = prevColor ? { color: prevColor, fillColor: prevColor } : {};
+    previouslyClicked.setStyle(Object.assign({
       opacity: 0.3,
       fillOpacity: 0.3,
-    });
+    }, prevColorStyle));
     previouslyClicked.eachLayer(function (layer) {
       if (layer.setIcon) {
         layer.setIcon(defaultIcon);
@@ -526,10 +539,12 @@ function selectGeoJSONFeature(id) {
   selectedRowId = id;
 
   // Set style for newly selected feature
-  layer.setStyle({
+  const newColor = geoJSONColors[id];
+  const newColorStyle = newColor ? { color: newColor, fillColor: newColor } : {};
+  layer.setStyle(Object.assign({
     opacity: 0.6,
     fillOpacity: 0.6,
-  });
+  }, newColorStyle));
   layer.eachLayer(function (l) {
     if (l.setIcon) {
       l.setIcon(selectedIcon);
@@ -560,6 +575,7 @@ function defaultMapping(record, mappings) {
       [Address]: hasCol(Address, record) ? Address : null,
       [GeocodedAddress]: hasCol(GeocodedAddress, record) ? GeocodedAddress : null,
       [Geocode]: hasCol(Geocode, record) ? Geocode : null,
+      [Color]: hasCol(Color, record) ? Color : null,
     };
   }
   return mappings;
@@ -684,6 +700,13 @@ grist.ready({
       type: "Text",
       title: "Geocoded Address",
       optional,
+    },
+    {
+      name: "Color",
+      type: "Text",
+      title: "Color",
+      optional,
+      description: "Color code for GeoJSON features (e.g. '#FF0000', 'red'). Applied as fill and border color.",
     },
   ],
   allowSelectBy: true,
