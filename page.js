@@ -684,8 +684,8 @@ const optional = true;
 grist.ready({
   columns: [
     "Name",
-    { name: "Longitude", type: "Numeric" },
-    { name: "Latitude", type: "Numeric" },
+    { name: "Longitude", type: "Numeric", optional },
+    { name: "Latitude", type: "Numeric", optional },
     {
       name: "GeoJSON",
       type: "Text",
