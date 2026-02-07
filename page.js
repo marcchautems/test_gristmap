@@ -29,8 +29,11 @@ const GeocodedAddress = 'GeocodedAddress';
 const Style = 'Style';
 // Optional - column to group features into toggleable map layers
 const Layer = 'Layer';
+// Optional - multiple columns to display in the popup
+const Popup = 'Popup';
 let lastRecord;
 let lastRecords;
+let rawRecordsById = {};
 
 
 //Color markers downloaded from leaflet repo, color-shifted to green
@@ -200,6 +203,31 @@ function getInfo(rec) {
     layer: Layer in rec ? parseValue(rec[Layer]) : null,
   };
   return result;
+}
+
+function buildPopupContent(name, rawRec, mappings) {
+  // If no Popup columns mapped, fall back to just the name
+  if (!mappings || !(Popup in mappings) || !mappings[Popup] || !rawRec) {
+    return DOMPurify.sanitize(String(name || ''));
+  }
+  const popupMappings = mappings[Popup];
+  // allowMultiple mappings can be a single string or an array
+  const colNames = Array.isArray(popupMappings) ? popupMappings : [popupMappings];
+  if (colNames.length === 0) {
+    return DOMPurify.sanitize(String(name || ''));
+  }
+  let html = '<div style="max-width:300px">';
+  if (name) {
+    html += '<strong>' + DOMPurify.sanitize(String(name)) + '</strong>';
+  }
+  for (const col of colNames) {
+    const val = parseValue(rawRec[col]);
+    if (val == null || val === '') { continue; }
+    html += '<br><em>' + DOMPurify.sanitize(String(col)) + ':</em> '
+          + DOMPurify.sanitize(String(val));
+  }
+  html += '</div>';
+  return html;
 }
 
 // Recursively extract all coordinate points from a GeoJSON geometry
@@ -380,7 +408,8 @@ function updateMap(data, mappings) {
           });
         },
         onEachFeature: function (feature, layer) {
-          layer.bindPopup(name);
+          const popupHtml = buildPopupContent(name, rawRecordsById[id], mappings);
+          layer.bindPopup(popupHtml);
           layer.on("click", () => {
             selectGeoJSONFeature(id);
           });
@@ -458,7 +487,8 @@ function updateMap(data, mappings) {
         pane: id == selectedRowId ? "selectedMarker" : "otherMarkers",
       });
 
-      marker.bindPopup(name);
+      const popupHtml = buildPopupContent(name, rawRecordsById[id], mappings);
+      marker.bindPopup(popupHtml);
       markers.addLayer(marker);
 
       popups[id] = marker;
@@ -604,6 +634,7 @@ function defaultMapping(record, mappings) {
       [Geocode]: hasCol(Geocode, record) ? Geocode : null,
       [Style]: hasCol(Style, record) ? Style : null,
       [Layer]: hasCol(Layer, record) ? Layer : null,
+      [Popup]: hasCol(Popup, record) ? Popup : null,
     };
   }
   return mappings;
@@ -622,6 +653,7 @@ function selectOnMap(rec, mappings) {
 }
 
 grist.onRecord((record, mappings) => {
+  rawRecordsById[record.id] = record;
   if (mode === 'single') {
     // If mappings are not done, we will assume that table has correct columns.
     // This is done to support existing widgets which where configured by
@@ -648,6 +680,8 @@ grist.onRecord((record, mappings) => {
   }
 });
 grist.onRecords((data, mappings) => {
+  rawRecordsById = {};
+  for (const rec of data) { rawRecordsById[rec.id] = rec; }
   lastRecords = grist.mapColumnNames(data) || data;
   if (mode !== 'single') {
     // If mappings are not done, we will assume that table has correct columns.
@@ -742,6 +776,14 @@ grist.ready({
       title: "Layer",
       optional,
       description: "Layer name to group features. Each unique value creates a toggleable overlay on the map.",
+    },
+    {
+      name: "Popup",
+      type: "Any",
+      title: "Popup",
+      optional,
+      allowMultiple: true,
+      description: "Columns to display in the popup when clicking a feature.",
     },
   ],
   allowSelectBy: true,
