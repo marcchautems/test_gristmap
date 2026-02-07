@@ -25,8 +25,8 @@ const Address = 'Address';
 //            to store last geocoded Address. Enables map widget
 //            to automatically update the geocoding if Address is changed
 const GeocodedAddress = 'GeocodedAddress';
-// Optional - column with color code (e.g. "#FF0000", "red") for GeoJSON features
-const Color = 'Color';
+// Optional - column with JSON style for GeoJSON features (Leaflet path options)
+const Style = 'Style';
 let lastRecord;
 let lastRecords;
 
@@ -194,7 +194,7 @@ function getInfo(rec) {
     lng: parseValue(rec[Longitude]),
     lat: parseValue(rec[Latitude]),
     geojson: parseValue(rec[GeoJSON]),
-    color: Color in rec ? parseValue(rec[Color]) : null,
+    style: Style in rec ? parseValue(rec[Style]) : null,
   };
   return result;
 }
@@ -258,7 +258,7 @@ let clearGeoJSONLayers = () => {};
 
 let markers = [];
 let geoJSONLayers = {};
-let geoJSONColors = {};
+let geoJSONStyles = {};
 let geoJSONGroup = null;
 
 function updateMap(data, mappings) {
@@ -328,14 +328,14 @@ function updateMap(data, mappings) {
 
   popups = {}; // Map: {[rowid]: L.marker or L.geoJSON layer}
   geoJSONLayers = {};
-  geoJSONColors = {};
+  geoJSONStyles = {};
 
   if (isGeoJSONMode) {
     // GeoJSON mode
     geoJSONGroup = L.featureGroup();
 
     for (const rec of data) {
-      const { id, name, geojson, color } = getInfo(rec);
+      const { id, name, geojson, style: rawStyle } = getInfo(rec);
 
       if (!geojson) {
         continue;
@@ -353,16 +353,23 @@ function updateMap(data, mappings) {
       // Extract points for bounds
       points.push(...extractPointsFromGeoJSON(parsedGeoJSON));
 
-      // Store color for this feature (used when toggling selection)
-      if (color) { geoJSONColors[id] = color; }
+      // Parse and store style for this feature (used when toggling selection)
+      let customStyle = {};
+      if (rawStyle) {
+        try {
+          customStyle = typeof rawStyle === 'string' ? JSON.parse(rawStyle) : rawStyle;
+        } catch (e) {
+          console.error("Invalid Style JSON for row", id, ":", e);
+        }
+      }
+      if (Object.keys(customStyle).length > 0) { geoJSONStyles[id] = customStyle; }
 
       // Create GeoJSON layer
-      const colorStyle = color ? { color: color, fillColor: color } : {};
       const layer = L.geoJSON(parsedGeoJSON, {
         style: Object.assign({
           opacity: id == selectedRowId ? 0.6 : 0.3,
           fillOpacity: id == selectedRowId ? 0.6 : 0.3,
-        }, colorStyle),
+        }, customStyle),
         pointToLayer: function (feature, latlng) {
           return L.marker(latlng, {
             icon: id == selectedRowId ? selectedIcon : defaultIcon,
@@ -477,12 +484,11 @@ function clearPopupMarker() {
       marker.pane = "otherMarkers";
     } else {
       // It's a GeoJSON layer
-      const prevColor = geoJSONColors[selectedRowId];
-      const prevColorStyle = prevColor ? { color: prevColor, fillColor: prevColor } : {};
+      const prevStyle = geoJSONStyles[selectedRowId] || {};
       marker.setStyle(Object.assign({
         opacity: 0.3,
         fillOpacity: 0.3,
-      }, prevColorStyle));
+      }, prevStyle));
     }
   }
 }
@@ -517,12 +523,11 @@ function selectGeoJSONFeature(id) {
   // Reset opacity for previously selected feature
   const previouslyClicked = geoJSONLayers[selectedRowId];
   if (previouslyClicked) {
-    const prevColor = geoJSONColors[selectedRowId];
-    const prevColorStyle = prevColor ? { color: prevColor, fillColor: prevColor } : {};
+    const prevStyle = geoJSONStyles[selectedRowId] || {};
     previouslyClicked.setStyle(Object.assign({
       opacity: 0.3,
       fillOpacity: 0.3,
-    }, prevColorStyle));
+    }, prevStyle));
     previouslyClicked.eachLayer(function (layer) {
       if (layer.setIcon) {
         layer.setIcon(defaultIcon);
@@ -539,12 +544,11 @@ function selectGeoJSONFeature(id) {
   selectedRowId = id;
 
   // Set style for newly selected feature
-  const newColor = geoJSONColors[id];
-  const newColorStyle = newColor ? { color: newColor, fillColor: newColor } : {};
+  const newStyle = geoJSONStyles[id] || {};
   layer.setStyle(Object.assign({
     opacity: 0.6,
     fillOpacity: 0.6,
-  }, newColorStyle));
+  }, newStyle));
   layer.eachLayer(function (l) {
     if (l.setIcon) {
       l.setIcon(selectedIcon);
@@ -575,7 +579,7 @@ function defaultMapping(record, mappings) {
       [Address]: hasCol(Address, record) ? Address : null,
       [GeocodedAddress]: hasCol(GeocodedAddress, record) ? GeocodedAddress : null,
       [Geocode]: hasCol(Geocode, record) ? Geocode : null,
-      [Color]: hasCol(Color, record) ? Color : null,
+      [Style]: hasCol(Style, record) ? Style : null,
     };
   }
   return mappings;
@@ -702,11 +706,11 @@ grist.ready({
       optional,
     },
     {
-      name: "Color",
+      name: "Style",
       type: "Text",
-      title: "Color",
+      title: "Style",
       optional,
-      description: "Color code for GeoJSON features (e.g. '#FF0000', 'red'). Applied as fill and border color.",
+      description: "JSON style for GeoJSON features. Supports Leaflet path options: color, fillColor, weight, opacity, fillOpacity, dashArray, etc.",
     },
   ],
   allowSelectBy: true,
