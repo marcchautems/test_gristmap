@@ -27,6 +27,8 @@ const Address = 'Address';
 const GeocodedAddress = 'GeocodedAddress';
 // Optional - column with JSON style for GeoJSON features (Leaflet path options)
 const Style = 'Style';
+// Optional - column to group features into toggleable map layers
+const Layer = 'Layer';
 let lastRecord;
 let lastRecords;
 
@@ -195,6 +197,7 @@ function getInfo(rec) {
     lat: parseValue(rec[Latitude]),
     geojson: parseValue(rec[GeoJSON]),
     style: Style in rec ? parseValue(rec[Style]) : null,
+    layer: Layer in rec ? parseValue(rec[Layer]) : null,
   };
   return result;
 }
@@ -259,7 +262,6 @@ let clearGeoJSONLayers = () => {};
 let markers = [];
 let geoJSONLayers = {};
 let geoJSONStyles = {};
-let geoJSONGroup = null;
 
 function updateMap(data, mappings) {
   data = data || selectedRecords;
@@ -331,11 +333,12 @@ function updateMap(data, mappings) {
   geoJSONStyles = {};
 
   if (isGeoJSONMode) {
-    // GeoJSON mode
-    geoJSONGroup = L.featureGroup();
+    // GeoJSON mode — group features by Layer column value
+    const layerGroups = {}; // { layerName: L.featureGroup }
+    const isLayerMode = mappings && Layer in mappings && mappings[Layer];
 
     for (const rec of data) {
-      const { id, name, geojson, style: rawStyle } = getInfo(rec);
+      const { id, name, geojson, style: rawStyle, layer: layerName } = getInfo(rec);
 
       if (!geojson) {
         continue;
@@ -384,13 +387,33 @@ function updateMap(data, mappings) {
         },
       });
 
-      geoJSONGroup.addLayer(layer);
+      // Add to the appropriate layer group
+      const groupName = (isLayerMode && layerName) ? String(layerName) : "Default";
+      if (!layerGroups[groupName]) {
+        layerGroups[groupName] = L.featureGroup();
+      }
+      layerGroups[groupName].addLayer(layer);
+
       geoJSONLayers[id] = layer;
       popups[id] = layer;
     }
 
-    map.addLayer(geoJSONGroup);
-    clearGeoJSONLayers = () => map.removeLayer(geoJSONGroup);
+    // Add all layer groups to the map
+    for (const groupName in layerGroups) {
+      map.addLayer(layerGroups[groupName]);
+    }
+
+    // Show layer control only when Layer column is mapped and there are multiple groups
+    const groupNames = Object.keys(layerGroups);
+    if (isLayerMode && groupNames.length > 1) {
+      L.control.layers(null, layerGroups).addTo(map);
+    }
+
+    clearGeoJSONLayers = () => {
+      for (const groupName in layerGroups) {
+        map.removeLayer(layerGroups[groupName]);
+      }
+    };
   } else {
     // Coordinates mode (original behavior)
     // Make this before markerClusterGroup so iconCreateFunction
@@ -580,6 +603,7 @@ function defaultMapping(record, mappings) {
       [GeocodedAddress]: hasCol(GeocodedAddress, record) ? GeocodedAddress : null,
       [Geocode]: hasCol(Geocode, record) ? Geocode : null,
       [Style]: hasCol(Style, record) ? Style : null,
+      [Layer]: hasCol(Layer, record) ? Layer : null,
     };
   }
   return mappings;
@@ -711,6 +735,13 @@ grist.ready({
       title: "Style",
       optional,
       description: "JSON style for GeoJSON features. Supports Leaflet path options: color, fillColor, weight, opacity, fillOpacity, dashArray, etc.",
+    },
+    {
+      name: "Layer",
+      type: "Text",
+      title: "Layer",
+      optional,
+      description: "Layer name to group features. Each unique value creates a toggleable overlay on the map.",
     },
   ],
   allowSelectBy: true,
