@@ -52,6 +52,13 @@ html, body, #map {
   display: inline-block;
 }
 
+#additionalLayers {
+  width: 100%;
+  font-family: monospace;
+  font-size: 11px;
+  box-sizing: border-box;
+}
+
 /* JV: Needed to highlight selected cluster */
 .marker-cluster-selected {
   border: 3px solid #16b378;

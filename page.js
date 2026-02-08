@@ -34,6 +34,7 @@ const Popup = 'Popup';
 let lastRecord;
 let lastRecords;
 let rawRecordsById = {};
+let additionalLayersConfig = [];
 
 
 //Color markers downloaded from leaflet repo, color-shifted to green
@@ -283,6 +284,59 @@ function extractPointsFromGeoJSON(geojson) {
   return points;
 }
 
+// Fetch additional layers from other Grist tables based on config
+async function fetchAdditionalLayers() {
+  const results = [];
+  if (!additionalLayersConfig || additionalLayersConfig.length === 0) {
+    return results;
+  }
+  for (const config of additionalLayersConfig) {
+    if (!config.table || !config.columns || !config.columns.GeoJSON) {
+      console.warn("Skipping additional layer with missing table or GeoJSON column:", config);
+      continue;
+    }
+    try {
+      const tableData = await grist.docApi.fetchTable(config.table);
+      if (!tableData || !tableData.id) { continue; }
+      // Pivot column-oriented data to row-oriented records
+      const geojsonCol = config.columns.GeoJSON;
+      const nameCol = config.columns.Name;
+      const styleCol = config.columns.Style;
+      const features = [];
+      for (let i = 0; i < tableData.id.length; i++) {
+        const geojsonRaw = tableData[geojsonCol] ? tableData[geojsonCol][i] : null;
+        if (!geojsonRaw) { continue; }
+        let parsedGeoJSON;
+        try {
+          parsedGeoJSON = typeof geojsonRaw === 'string' ? JSON.parse(geojsonRaw) : geojsonRaw;
+        } catch (e) {
+          continue;
+        }
+        let style = {};
+        if (styleCol && tableData[styleCol]) {
+          const styleRaw = tableData[styleCol][i];
+          if (styleRaw) {
+            try {
+              style = typeof styleRaw === 'string' ? JSON.parse(styleRaw) : styleRaw;
+            } catch (e) { /* ignore */ }
+          }
+        }
+        const name = (nameCol && tableData[nameCol]) ? tableData[nameCol][i] : null;
+        features.push({ geojson: parsedGeoJSON, name: name, style: style });
+      }
+      results.push({
+        layerName: config.layer || config.table,
+        order: config.order ?? 0,
+        interactive: config.interactive !== false,
+        features: features,
+      });
+    } catch (e) {
+      console.error("Error fetching additional table '" + config.table + "':", e);
+    }
+  }
+  return results;
+}
+
 // Function to clear last added markers. Used to clear the map when new record is selected.
 let clearMarkers = () => {};
 let clearGeoJSONLayers = () => {};
@@ -359,10 +413,10 @@ function updateMap(data, mappings) {
   popups = {}; // Map: {[rowid]: L.marker or L.geoJSON layer}
   geoJSONLayers = {};
   geoJSONStyles = {};
+  const layerGroups = {}; // { layerName: L.featureGroup } — shared across main + additional layers
 
   if (isGeoJSONMode) {
     // GeoJSON mode — group features by Layer column value
-    const layerGroups = {}; // { layerName: L.featureGroup }
     const isLayerMode = mappings && Layer in mappings && mappings[Layer];
 
     for (const rec of data) {
@@ -432,12 +486,6 @@ function updateMap(data, mappings) {
       map.addLayer(layerGroups[groupName]);
     }
 
-    // Show layer control only when Layer column is mapped and there are multiple groups
-    const groupNames = Object.keys(layerGroups);
-    if (isLayerMode && groupNames.length > 1) {
-      L.control.layers(null, layerGroups).addTo(map);
-    }
-
     clearGeoJSONLayers = () => {
       for (const groupName in layerGroups) {
         map.removeLayer(layerGroups[groupName]);
@@ -497,6 +545,57 @@ function updateMap(data, mappings) {
 
     clearMarkers = () => map.removeLayer(markers);
   }
+
+  // Fetch and add additional layers from other tables
+  fetchAdditionalLayers().then((additionalLayers) => {
+    if (additionalLayers.length === 0) {
+      // No additional layers — still show layer control for main layers if needed
+      if (Object.keys(layerGroups).length > 1) {
+        L.control.layers(null, layerGroups).addTo(map);
+      }
+      return;
+    }
+
+    // Sort by order (lower = drawn first = behind)
+    additionalLayers.sort((a, b) => a.order - b.order);
+
+    for (const layerConfig of additionalLayers) {
+      const group = L.featureGroup();
+      for (const feat of layerConfig.features) {
+        const featLayer = L.geoJSON(feat.geojson, {
+          interactive: layerConfig.interactive,
+          style: Object.assign({ opacity: 0.5, fillOpacity: 0.3 }, feat.style),
+          onEachFeature: function (_feature, layer) {
+            if (layerConfig.interactive && feat.name) {
+              layer.bindPopup(DOMPurify.sanitize(String(feat.name)));
+            }
+          },
+        });
+        group.addLayer(featLayer);
+        points.push(...extractPointsFromGeoJSON(feat.geojson));
+      }
+      map.addLayer(group);
+      layerGroups[layerConfig.layerName] = group;
+    }
+
+    // Show layer control with all groups (main + additional)
+    if (Object.keys(layerGroups).length > 1) {
+      L.control.layers(null, layerGroups).addTo(map);
+    }
+
+    // Re-fit bounds with additional points included
+    try {
+      map.fitBounds(new L.LatLngBounds(points), {maxZoom: 15, padding: [0, 0]});
+    } catch (err) {
+      console.warn('cannot fit bounds');
+    }
+  }).catch((err) => {
+    console.error("Error loading additional layers:", err);
+    // Still show layer control for main layers on error
+    if (Object.keys(layerGroups).length > 1) {
+      L.control.layers(null, layerGroups).addTo(map);
+    }
+  });
 
   try {
     map.fitBounds(new L.LatLngBounds(points), {maxZoom: 15, padding: [0, 0]});
@@ -740,6 +839,12 @@ function onEditOptions() {
       await grist.setOption(opt, e.target.value);
     }
   })
+  const layersTextarea = document.getElementById('additionalLayers');
+  layersTextarea.value = additionalLayersConfig.length > 0
+    ? JSON.stringify(additionalLayersConfig, null, 2) : '';
+  layersTextarea.onchange = async (e) => {
+    await grist.setOption('additionalLayers', e.target.value);
+  };
 }
 
 const optional = true;
@@ -803,4 +908,15 @@ grist.onOptions((options, interaction) => {
   const newCopyright = options?.mapCopyright ?? mapCopyright;
   mapCopyright = newCopyright
   document.getElementById("mapCopyright").value = mapCopyright;
+  // Load additional layers config
+  const layersJson = options?.additionalLayers;
+  if (layersJson) {
+    try {
+      additionalLayersConfig = JSON.parse(layersJson);
+    } catch (e) {
+      console.error("Invalid additional layers JSON:", e);
+    }
+  }
+  document.getElementById("additionalLayers").value =
+    additionalLayersConfig.length > 0 ? JSON.stringify(additionalLayersConfig, null, 2) : '';
 });
