@@ -337,6 +337,209 @@ async function fetchAdditionalLayers() {
   return results;
 }
 
+// Custom grouped layer control with collapsible groups
+L.Control.GroupedLayers = L.Control.extend({
+  options: {
+    position: 'topright',
+    collapsed: true,
+  },
+
+  // groups: { "Group Name": { "Sub Layer": L.Layer, ... }, ... }
+  // overlays: { "Layer Name": L.Layer, ... } (ungrouped/standalone)
+  initialize: function (groups, overlays, options) {
+    L.setOptions(this, options);
+    this._groups = groups || {};
+    this._overlays = overlays || {};
+  },
+
+  onAdd: function (map) {
+    this._map = map;
+    var container = L.DomUtil.create('div', 'leaflet-control-layers');
+    L.DomEvent.disableClickPropagation(container);
+    L.DomEvent.disableScrollPropagation(container);
+
+    var section = L.DomUtil.create('section', 'leaflet-control-layers-list', container);
+    this._section = section;
+    this._buildContent();
+
+    if (this.options.collapsed) {
+      if (!L.Browser.android) {
+        L.DomEvent.on(container, 'mouseenter', this._expand, this);
+        L.DomEvent.on(container, 'mouseleave', this._collapse, this);
+      }
+      var link = L.DomUtil.create('a', 'leaflet-control-layers-toggle', container);
+      link.href = '#';
+      link.title = 'Layers';
+      if (L.Browser.touch) {
+        L.DomEvent.on(link, 'click', L.DomEvent.stop);
+        L.DomEvent.on(link, 'click', this._expand, this);
+      } else {
+        L.DomEvent.on(link, 'focus', this._expand, this);
+      }
+    } else {
+      this._expand();
+    }
+
+    return container;
+  },
+
+  _expand: function () {
+    L.DomUtil.addClass(this.getContainer(), 'leaflet-control-layers-expanded');
+    return this;
+  },
+
+  _collapse: function () {
+    L.DomUtil.removeClass(this.getContainer(), 'leaflet-control-layers-expanded');
+    return this;
+  },
+
+  _buildContent: function () {
+    var section = this._section;
+    var overlaysDiv = L.DomUtil.create('div', 'leaflet-control-layers-overlays', section);
+
+    // Add groups
+    var hasGroups = false;
+    for (var groupName in this._groups) {
+      this._addGroup(overlaysDiv, groupName, this._groups[groupName]);
+      hasGroups = true;
+    }
+
+    // Add separator between groups and standalone overlays
+    if (hasGroups && Object.keys(this._overlays).length > 0) {
+      L.DomUtil.create('div', 'leaflet-control-layers-separator', overlaysDiv);
+    }
+
+    // Add standalone overlays
+    for (var name in this._overlays) {
+      this._addOverlayRow(overlaysDiv, name, this._overlays[name]);
+    }
+  },
+
+  _addOverlayRow: function (parent, name, layer) {
+    var label = document.createElement('label');
+    var input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'leaflet-control-layers-selector';
+    input.checked = this._map.hasLayer(layer);
+    var self = this;
+    L.DomEvent.on(input, 'change', function () {
+      if (input.checked) { self._map.addLayer(layer); }
+      else { self._map.removeLayer(layer); }
+    });
+    var span = document.createElement('span');
+    span.textContent = ' ' + name;
+    label.appendChild(input);
+    label.appendChild(span);
+    parent.appendChild(label);
+  },
+
+  _addGroup: function (parent, groupName, layers) {
+    var groupDiv = document.createElement('div');
+    groupDiv.className = 'leaflet-control-layers-group';
+
+    // Group header (div, not label, so toggle/name clicks don't affect checkbox)
+    var header = document.createElement('div');
+    header.className = 'leaflet-control-layers-group-header';
+
+    var groupCb = document.createElement('input');
+    groupCb.type = 'checkbox';
+    groupCb.className = 'leaflet-control-layers-selector';
+    groupCb.checked = true;
+
+    var toggle = document.createElement('span');
+    toggle.className = 'leaflet-control-layers-group-toggle';
+    toggle.textContent = '\u25B6';
+
+    var nameSpan = document.createElement('span');
+    nameSpan.className = 'leaflet-control-layers-group-name';
+    nameSpan.textContent = ' ' + groupName;
+
+    header.appendChild(groupCb);
+    header.appendChild(toggle);
+    header.appendChild(nameSpan);
+    groupDiv.appendChild(header);
+
+    // Children (collapsed by default)
+    var childrenDiv = document.createElement('div');
+    childrenDiv.className = 'leaflet-control-layers-group-children';
+    childrenDiv.style.display = 'none';
+
+    var childItems = [];
+    var self = this;
+
+    for (var layerName in layers) {
+      (function (lName, lyr) {
+        var childLabel = document.createElement('label');
+        var childCb = document.createElement('input');
+        childCb.type = 'checkbox';
+        childCb.className = 'leaflet-control-layers-selector';
+        childCb.checked = self._map.hasLayer(lyr);
+        childItems.push({ input: childCb, layer: lyr });
+
+        var childSpan = document.createElement('span');
+        childSpan.textContent = ' ' + lName;
+        childLabel.appendChild(childCb);
+        childLabel.appendChild(childSpan);
+        childrenDiv.appendChild(childLabel);
+
+        L.DomEvent.on(childCb, 'change', function () {
+          if (childCb.checked) { self._map.addLayer(lyr); }
+          else { self._map.removeLayer(lyr); }
+          self._updateGroupCb(groupCb, childItems);
+        });
+      })(layerName, layers[layerName]);
+    }
+
+    groupDiv.appendChild(childrenDiv);
+    parent.appendChild(groupDiv);
+
+    // Group checkbox toggles all children
+    L.DomEvent.on(groupCb, 'change', function () {
+      for (var i = 0; i < childItems.length; i++) {
+        childItems[i].input.checked = groupCb.checked;
+        if (groupCb.checked) { self._map.addLayer(childItems[i].layer); }
+        else { self._map.removeLayer(childItems[i].layer); }
+      }
+      groupCb.indeterminate = false;
+    });
+
+    // Toggle expand/collapse for children
+    var doToggle = function (e) {
+      L.DomEvent.stop(e);
+      var isHidden = childrenDiv.style.display === 'none';
+      childrenDiv.style.display = isHidden ? '' : 'none';
+      toggle.textContent = isHidden ? '\u25BC' : '\u25B6';
+    };
+    L.DomEvent.on(toggle, 'click', doToggle);
+    L.DomEvent.on(nameSpan, 'click', doToggle);
+  },
+
+  _updateGroupCb: function (groupCb, childItems) {
+    var allChecked = childItems.every(function (ci) { return ci.input.checked; });
+    var someChecked = childItems.some(function (ci) { return ci.input.checked; });
+    groupCb.checked = allChecked;
+    groupCb.indeterminate = someChecked && !allChecked;
+  },
+});
+
+// Helper: add the appropriate layer control (grouped or flat)
+function addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, mappings) {
+  var allOverlays = Object.assign({}, mainLayerGroups, additionalLayerGroups);
+  var totalCount = Object.keys(allOverlays).length;
+  if (totalCount <= 1) { return; }
+
+  if (isLayerMode && Object.keys(mainLayerGroups).length > 1) {
+    // Grouped control: main layers in a collapsible group, additional as standalone
+    var groupName = (mappings && mappings[Layer]) ? String(mappings[Layer]) : 'Layers';
+    var groups = {};
+    groups[groupName] = mainLayerGroups;
+    new L.Control.GroupedLayers(groups, additionalLayerGroups).addTo(map);
+  } else {
+    // Flat control (no Layer column or only one main group)
+    L.control.layers(null, allOverlays).addTo(map);
+  }
+}
+
 // Function to clear last added markers. Used to clear the map when new record is selected.
 let clearMarkers = () => {};
 let clearGeoJSONLayers = () => {};
@@ -413,11 +616,11 @@ function updateMap(data, mappings) {
   popups = {}; // Map: {[rowid]: L.marker or L.geoJSON layer}
   geoJSONLayers = {};
   geoJSONStyles = {};
-  const layerGroups = {}; // { layerName: L.featureGroup } — shared across main + additional layers
+  const mainLayerGroups = {}; // { layerName: L.featureGroup } — from main table's Layer column
+  const isLayerMode = isGeoJSONMode && mappings && Layer in mappings && mappings[Layer];
 
   if (isGeoJSONMode) {
     // GeoJSON mode — group features by Layer column value
-    const isLayerMode = mappings && Layer in mappings && mappings[Layer];
 
     for (const rec of data) {
       const { id, name, geojson, style: rawStyle, layer: layerName } = getInfo(rec);
@@ -472,23 +675,23 @@ function updateMap(data, mappings) {
 
       // Add to the appropriate layer group
       const groupName = (isLayerMode && layerName) ? String(layerName) : "Default";
-      if (!layerGroups[groupName]) {
-        layerGroups[groupName] = L.featureGroup();
+      if (!mainLayerGroups[groupName]) {
+        mainLayerGroups[groupName] = L.featureGroup();
       }
-      layerGroups[groupName].addLayer(layer);
+      mainLayerGroups[groupName].addLayer(layer);
 
       geoJSONLayers[id] = layer;
       popups[id] = layer;
     }
 
     // Add all layer groups to the map
-    for (const groupName in layerGroups) {
-      map.addLayer(layerGroups[groupName]);
+    for (const groupName in mainLayerGroups) {
+      map.addLayer(mainLayerGroups[groupName]);
     }
 
     clearGeoJSONLayers = () => {
-      for (const groupName in layerGroups) {
-        map.removeLayer(layerGroups[groupName]);
+      for (const groupName in mainLayerGroups) {
+        map.removeLayer(mainLayerGroups[groupName]);
       }
     };
   } else {
@@ -548,53 +751,43 @@ function updateMap(data, mappings) {
 
   // Fetch and add additional layers from other tables
   fetchAdditionalLayers().then((additionalLayers) => {
-    if (additionalLayers.length === 0) {
-      // No additional layers — still show layer control for main layers if needed
-      if (Object.keys(layerGroups).length > 1) {
-        L.control.layers(null, layerGroups).addTo(map);
+    const additionalLayerGroups = {};
+
+    if (additionalLayers.length > 0) {
+      // Sort by order (lower = drawn first = behind)
+      additionalLayers.sort((a, b) => a.order - b.order);
+
+      for (const layerConfig of additionalLayers) {
+        const group = L.featureGroup();
+        for (const feat of layerConfig.features) {
+          const featLayer = L.geoJSON(feat.geojson, {
+            interactive: layerConfig.interactive,
+            style: Object.assign({ opacity: 0.5, fillOpacity: 0.3 }, feat.style),
+            onEachFeature: function (_feature, layer) {
+              if (layerConfig.interactive && feat.name) {
+                layer.bindPopup(DOMPurify.sanitize(String(feat.name)));
+              }
+            },
+          });
+          group.addLayer(featLayer);
+          points.push(...extractPointsFromGeoJSON(feat.geojson));
+        }
+        map.addLayer(group);
+        additionalLayerGroups[layerConfig.layerName] = group;
       }
-      return;
-    }
 
-    // Sort by order (lower = drawn first = behind)
-    additionalLayers.sort((a, b) => a.order - b.order);
-
-    for (const layerConfig of additionalLayers) {
-      const group = L.featureGroup();
-      for (const feat of layerConfig.features) {
-        const featLayer = L.geoJSON(feat.geojson, {
-          interactive: layerConfig.interactive,
-          style: Object.assign({ opacity: 0.5, fillOpacity: 0.3 }, feat.style),
-          onEachFeature: function (_feature, layer) {
-            if (layerConfig.interactive && feat.name) {
-              layer.bindPopup(DOMPurify.sanitize(String(feat.name)));
-            }
-          },
-        });
-        group.addLayer(featLayer);
-        points.push(...extractPointsFromGeoJSON(feat.geojson));
+      // Re-fit bounds with additional points included
+      try {
+        map.fitBounds(new L.LatLngBounds(points), {maxZoom: 20, padding: [0, 0]});
+      } catch (err) {
+        console.warn('cannot fit bounds');
       }
-      map.addLayer(group);
-      layerGroups[layerConfig.layerName] = group;
     }
 
-    // Show layer control with all groups (main + additional)
-    if (Object.keys(layerGroups).length > 1) {
-      L.control.layers(null, layerGroups).addTo(map);
-    }
-
-    // Re-fit bounds with additional points included
-    try {
-      map.fitBounds(new L.LatLngBounds(points), {maxZoom: 20, padding: [0, 0]});
-    } catch (err) {
-      console.warn('cannot fit bounds');
-    }
+    addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, mappings);
   }).catch((err) => {
     console.error("Error loading additional layers:", err);
-    // Still show layer control for main layers on error
-    if (Object.keys(layerGroups).length > 1) {
-      L.control.layers(null, layerGroups).addTo(map);
-    }
+    addLayerControl(map, mainLayerGroups, {}, isLayerMode, mappings);
   });
 
   try {

@@ -59,6 +59,30 @@ html, body, #map {
   box-sizing: border-box;
 }
 
+/* Grouped layer control */
+.leaflet-control-layers-group-header {
+  display: flex;
+  align-items: center;
+  padding: 2px 0;
+}
+.leaflet-control-layers-group-toggle {
+  cursor: pointer;
+  font-size: 10px;
+  margin: 0 4px;
+  user-select: none;
+}
+.leaflet-control-layers-group-name {
+  cursor: pointer;
+  font-weight: bold;
+  user-select: none;
+}
+.leaflet-control-layers-group-children {
+  padding-left: 18px;
+}
+.leaflet-control-layers-group-children label {
+  display: block;
+}
+
 /* JV: Needed to highlight selected cluster */
 .marker-cluster-selected {
   border: 3px solid #16b378;
