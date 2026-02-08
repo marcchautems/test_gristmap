@@ -522,17 +522,31 @@ L.Control.GroupedLayers = L.Control.extend({
   },
 });
 
+// Fetch the display label of a column from Grist metadata
+async function getColumnLabel(colId) {
+  try {
+    var colData = await grist.docApi.fetchTable('_grist_Tables_column');
+    for (var i = 0; i < colData.id.length; i++) {
+      if (colData.colId[i] === colId) {
+        return colData.label[i] || colId;
+      }
+    }
+  } catch (e) {
+    console.warn('Could not fetch column label:', e);
+  }
+  return colId;
+}
+
 // Helper: add the appropriate layer control (grouped or flat)
-function addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, mappings) {
+function addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, layerGroupName) {
   var allOverlays = Object.assign({}, mainLayerGroups, additionalLayerGroups);
   var totalCount = Object.keys(allOverlays).length;
   if (totalCount <= 1) { return; }
 
   if (isLayerMode && Object.keys(mainLayerGroups).length > 1) {
     // Grouped control: main layers in a collapsible group, additional as standalone
-    var groupName = (mappings && mappings[Layer]) ? String(mappings[Layer]) : 'Layers';
     var groups = {};
-    groups[groupName] = mainLayerGroups;
+    groups[layerGroupName] = mainLayerGroups;
     new L.Control.GroupedLayers(groups, additionalLayerGroups).addTo(map);
   } else {
     // Flat control (no Layer column or only one main group)
@@ -750,7 +764,7 @@ function updateMap(data, mappings) {
   }
 
   // Fetch and add additional layers from other tables
-  fetchAdditionalLayers().then((additionalLayers) => {
+  fetchAdditionalLayers().then(async (additionalLayers) => {
     const additionalLayerGroups = {};
 
     if (additionalLayers.length > 0) {
@@ -784,10 +798,16 @@ function updateMap(data, mappings) {
       }
     }
 
-    addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, mappings);
+    // Resolve the display label for the Layer column group name
+    let layerGroupName = 'Layers';
+    if (isLayerMode && mappings && mappings[Layer]) {
+      layerGroupName = await getColumnLabel(String(mappings[Layer]));
+    }
+
+    addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, layerGroupName);
   }).catch((err) => {
     console.error("Error loading additional layers:", err);
-    addLayerControl(map, mainLayerGroups, {}, isLayerMode, mappings);
+    addLayerControl(map, mainLayerGroups, {}, isLayerMode, 'Layers');
   });
 
   try {
