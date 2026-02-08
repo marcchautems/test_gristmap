@@ -585,7 +585,7 @@ function updateMap(data, mappings) {
 
     // Re-fit bounds with additional points included
     try {
-      map.fitBounds(new L.LatLngBounds(points), {maxZoom: 15, padding: [0, 0]});
+      map.fitBounds(new L.LatLngBounds(points), {maxZoom: 20, padding: [0, 0]});
     } catch (err) {
       console.warn('cannot fit bounds');
     }
@@ -598,7 +598,7 @@ function updateMap(data, mappings) {
   });
 
   try {
-    map.fitBounds(new L.LatLngBounds(points), {maxZoom: 15, padding: [0, 0]});
+    map.fitBounds(new L.LatLngBounds(points), {maxZoom: 20, padding: [0, 0]});
   } catch (err) {
     console.warn('cannot fit bounds');
   }
