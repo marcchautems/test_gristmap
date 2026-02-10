@@ -83,6 +83,21 @@ html, body, #map {
   display: block;
 }
 
+/* Permanent polygon labels */
+.polygon-label {
+  background: none;
+  border: none;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: bold;
+  color: #333;
+  text-shadow: 1px 1px 2px #fff, -1px -1px 2px #fff, 1px -1px 2px #fff, -1px 1px 2px #fff;
+  white-space: nowrap;
+}
+.polygon-label::before {
+  display: none;
+}
+
 /* JV: Needed to highlight selected cluster */
 .marker-cluster-selected {
   border: 3px solid #16b378;

@@ -31,6 +31,10 @@ const Style = 'Style';
 const Layer = 'Layer';
 // Optional - multiple columns to display in the popup
 const Popup = 'Popup';
+// Optional - permanent text label displayed on the feature
+const Label = 'Label';
+// Optional - rotation angle (degrees) for the label
+const Bearing = 'Bearing';
 let lastRecord;
 let lastRecords;
 let rawRecordsById = {};
@@ -202,6 +206,8 @@ function getInfo(rec) {
     geojson: parseValue(rec[GeoJSON]),
     style: Style in rec ? parseValue(rec[Style]) : null,
     layer: Layer in rec ? parseValue(rec[Layer]) : null,
+    label: Label in rec ? parseValue(rec[Label]) : null,
+    bearing: Bearing in rec ? parseValue(rec[Bearing]) : null,
   };
   return result;
 }
@@ -644,7 +650,7 @@ function updateMap(data, mappings) {
     // GeoJSON mode — group features by Layer column value
 
     for (const rec of data) {
-      const { id, name, geojson, style: rawStyle, layer: layerName } = getInfo(rec);
+      const { id, name, geojson, style: rawStyle, layer: layerName, label, bearing } = getInfo(rec);
 
       if (!geojson) {
         continue;
@@ -693,6 +699,25 @@ function updateMap(data, mappings) {
           });
         },
       });
+
+      // Add permanent label tooltip if Label column is mapped
+      if (label) {
+        layer.eachLayer(function (sublayer) {
+          sublayer.bindTooltip(DOMPurify.sanitize(String(label)), {
+            permanent: true,
+            direction: 'center',
+            className: 'polygon-label',
+          });
+          if (bearing != null && bearing !== '') {
+            sublayer.on('tooltipopen', function () {
+              var el = sublayer.getTooltip().getElement();
+              if (el) {
+                el.style.transform = 'rotate(' + Number(bearing) + 'deg)';
+              }
+            });
+          }
+        });
+      }
 
       // Add to the appropriate layer group
       const groupName = (isLayerMode && layerName) ? String(layerName) : "Default";
@@ -961,6 +986,8 @@ function defaultMapping(record, mappings) {
       [Style]: hasCol(Style, record) ? Style : null,
       [Layer]: hasCol(Layer, record) ? Layer : null,
       [Popup]: hasCol(Popup, record) ? Popup : null,
+      [Label]: hasCol(Label, record) ? Label : null,
+      [Bearing]: hasCol(Bearing, record) ? Bearing : null,
     };
   }
   return mappings;
@@ -1116,6 +1143,20 @@ grist.ready({
       optional,
       allowMultiple: true,
       description: "Columns to display in the popup when clicking a feature.",
+    },
+    {
+      name: "Label",
+      type: "Text",
+      title: "Label",
+      optional,
+      description: "Permanent text label displayed on each feature.",
+    },
+    {
+      name: "Bearing",
+      type: "Numeric",
+      title: "Bearing",
+      optional,
+      description: "Rotation angle in degrees for the label text.",
     },
   ],
   allowSelectBy: true,
