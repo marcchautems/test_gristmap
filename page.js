@@ -742,10 +742,16 @@ function updateMap(data, mappings) {
             console.error("Invalid LabelStyle JSON for row", id, ":", e);
           }
         }
-        // Apply bearing rotation on inner span (avoids overwriting Leaflet's translate3d)
-        if (labelOpts.bearing != null) {
-          tooltipContent = '<span style="display:inline-block;transform:rotate('
-            + Number(labelOpts.bearing) + 'deg)">' + tooltipContent + '</span>';
+        // Build inline styles for the label span (all styles go in HTML to avoid
+        // relying on tooltipopen event, which doesn't fire for already-open permanent tooltips)
+        var inlineStyles = ['display:inline-block'];
+        if (labelOpts.bearing != null) inlineStyles.push('transform:rotate(' + Number(labelOpts.bearing) + 'deg)');
+        if (labelOpts.fontSize) inlineStyles.push('font-size:' + labelOpts.fontSize + 'px');
+        if (labelOpts.color) inlineStyles.push('color:' + labelOpts.color);
+        if (labelOpts.fontWeight) inlineStyles.push('font-weight:' + labelOpts.fontWeight);
+        if (labelOpts.opacity != null) inlineStyles.push('opacity:' + labelOpts.opacity);
+        if (inlineStyles.length > 1) {
+          tooltipContent = '<span style="' + inlineStyles.join(';') + '">' + tooltipContent + '</span>';
         }
         layer.eachLayer(function (sublayer) {
           sublayer.bindTooltip(tooltipContent, {
@@ -753,17 +759,8 @@ function updateMap(data, mappings) {
             direction: 'center',
             className: 'polygon-label',
           });
-          // Track for zoom-dependent updates
+          // Track for zoom-dependent updates (dynamic sizing, min/max zoom)
           labelTooltipRefs.push({ sublayer: sublayer, opts: labelOpts });
-          // Apply static styles via tooltipopen event
-          sublayer.on('tooltipopen', function () {
-            var el = sublayer.getTooltip().getElement();
-            if (!el) return;
-            if (labelOpts.fontSize) el.style.fontSize = labelOpts.fontSize + 'px';
-            if (labelOpts.color) el.style.color = labelOpts.color;
-            if (labelOpts.fontWeight) el.style.fontWeight = labelOpts.fontWeight;
-            if (labelOpts.opacity != null) el.style.opacity = labelOpts.opacity;
-          });
         });
       }
 
