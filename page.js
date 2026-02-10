@@ -653,11 +653,14 @@ function updateMap(data, mappings) {
         continue;
       }
       el.style.display = '';
-      // Dynamic font size scaling
+      // Dynamic font size scaling — target inner span if present (it has inline font-size)
       if (opts.dynamicSize && opts.fontSize) {
         var refZoom = opts.referenceZoom || 18;
         var scale = Math.pow(2, currentZoom - refZoom);
-        el.style.fontSize = (opts.fontSize * scale) + 'px';
+        var dynamicFontSize = (opts.fontSize * scale) + 'px';
+        var innerSpan = el.querySelector('span');
+        if (innerSpan) { innerSpan.style.fontSize = dynamicFontSize; }
+        else { el.style.fontSize = dynamicFontSize; }
       }
     }
   });
@@ -778,6 +781,11 @@ function updateMap(data, mappings) {
     // Add all layer groups to the map
     for (const groupName in mainLayerGroups) {
       map.addLayer(mainLayerGroups[groupName]);
+    }
+
+    // Fire zoomend once to set initial dynamic label sizes
+    if (labelTooltipRefs.length > 0) {
+      map.fireEvent('zoomend');
     }
 
     clearGeoJSONLayers = () => {
