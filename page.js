@@ -561,6 +561,7 @@ let clearGeoJSONLayers = () => {};
 let markers = [];
 let geoJSONLayers = {};
 let geoJSONStyles = {};
+let savedMapView = null; // { center, zoom } — persisted across updateMap calls via moveend event
 
 function updateMap(data, mappings) {
   data = data || selectedRecords;
@@ -605,14 +606,8 @@ function updateMap(data, mappings) {
 
   const error = document.querySelector('.error');
   if (error) { error.remove(); }
-  // Preserve the current map view (center + zoom) so data edits don't reset it
-  let savedCenter = null;
-  let savedZoom = null;
+  const isFirstLoad = !savedMapView;
   if (amap) {
-    try {
-      savedCenter = amap.getCenter();
-      savedZoom = amap.getZoom();
-    } catch (e) { /* ignore */ }
     try {
       amap.off();
       amap.remove();
@@ -624,6 +619,11 @@ function updateMap(data, mappings) {
   const map = L.map('map', {
     layers: [tiles],
     wheelPxPerZoomLevel: 90, //px, default 60, slows scrollwheel zoom
+  });
+
+  // Track map view changes to preserve position across data updates
+  map.on('moveend', function () {
+    savedMapView = { center: map.getCenter(), zoom: map.getZoom() };
   });
 
   // Make sure clusters always show up above points
@@ -798,7 +798,7 @@ function updateMap(data, mappings) {
       }
 
       // Re-fit bounds with additional points (only on first load)
-      if (!savedCenter) {
+      if (isFirstLoad) {
         try {
           map.fitBounds(new L.LatLngBounds(points), {maxZoom: 20, padding: [0, 0]});
         } catch (err) {
@@ -820,8 +820,8 @@ function updateMap(data, mappings) {
   });
 
   // Restore previous view if available, otherwise fit to data bounds
-  if (savedCenter && savedZoom !== null) {
-    map.setView(savedCenter, savedZoom);
+  if (!isFirstLoad) {
+    map.setView(savedMapView.center, savedMapView.zoom);
   } else {
     try {
       map.fitBounds(new L.LatLngBounds(points), {maxZoom: 20, padding: [0, 0]});
