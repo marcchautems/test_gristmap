@@ -702,20 +702,17 @@ function updateMap(data, mappings) {
 
       // Add permanent label tooltip if Label column is mapped
       if (label) {
+        var tooltipContent = DOMPurify.sanitize(String(label));
+        if (bearing != null && bearing !== '') {
+          tooltipContent = '<span style="display:inline-block;transform:rotate('
+            + Number(bearing) + 'deg)">' + tooltipContent + '</span>';
+        }
         layer.eachLayer(function (sublayer) {
-          sublayer.bindTooltip(DOMPurify.sanitize(String(label)), {
+          sublayer.bindTooltip(tooltipContent, {
             permanent: true,
             direction: 'center',
             className: 'polygon-label',
           });
-          if (bearing != null && bearing !== '') {
-            sublayer.on('tooltipopen', function () {
-              var el = sublayer.getTooltip().getElement();
-              if (el) {
-                el.style.transform = 'rotate(' + Number(bearing) + 'deg)';
-              }
-            });
-          }
         });
       }
 
