@@ -33,8 +33,8 @@ const Layer = 'Layer';
 const Popup = 'Popup';
 // Optional - permanent text label displayed on the feature
 const Label = 'Label';
-// Optional - rotation angle (degrees) for the label
-const Bearing = 'Bearing';
+// Optional - JSON style for the label (bearing, fontSize, color, fontWeight, dynamicSize, minZoom, maxZoom, opacity)
+const LabelStyle = 'LabelStyle';
 let lastRecord;
 let lastRecords;
 let rawRecordsById = {};
@@ -207,7 +207,7 @@ function getInfo(rec) {
     style: Style in rec ? parseValue(rec[Style]) : null,
     layer: Layer in rec ? parseValue(rec[Layer]) : null,
     label: Label in rec ? parseValue(rec[Label]) : null,
-    bearing: Bearing in rec ? parseValue(rec[Bearing]) : null,
+    labelStyle: LabelStyle in rec ? parseValue(rec[LabelStyle]) : null,
   };
   return result;
 }
@@ -567,6 +567,7 @@ let clearGeoJSONLayers = () => {};
 let markers = [];
 let geoJSONLayers = {};
 let geoJSONStyles = {};
+let labelTooltipRefs = []; // [{sublayer, opts}] — for zoom-dependent label updates
 let savedMapView = null; // { center, zoom } — persisted across updateMap calls via moveend event
 
 function updateMap(data, mappings) {
@@ -632,6 +633,35 @@ function updateMap(data, mappings) {
     savedMapView = { center: map.getCenter(), zoom: map.getZoom() };
   });
 
+  // Handle dynamic label sizing and min/max zoom visibility
+  map.on('zoomend', function () {
+    var currentZoom = map.getZoom();
+    for (var i = 0; i < labelTooltipRefs.length; i++) {
+      var ref = labelTooltipRefs[i];
+      var tooltip = ref.sublayer.getTooltip();
+      if (!tooltip) continue;
+      var el = tooltip.getElement();
+      if (!el) continue;
+      var opts = ref.opts;
+      // Min/max zoom visibility
+      if (opts.minZoom != null && currentZoom < opts.minZoom) {
+        el.style.display = 'none';
+        continue;
+      }
+      if (opts.maxZoom != null && currentZoom > opts.maxZoom) {
+        el.style.display = 'none';
+        continue;
+      }
+      el.style.display = '';
+      // Dynamic font size scaling
+      if (opts.dynamicSize && opts.fontSize) {
+        var refZoom = opts.referenceZoom || 18;
+        var scale = Math.pow(2, currentZoom - refZoom);
+        el.style.fontSize = (opts.fontSize * scale) + 'px';
+      }
+    }
+  });
+
   // Make sure clusters always show up above points
   // Default z-index for markers is 600, 650 is where tooltipPane z-index starts
   map.createPane('selectedMarker').style.zIndex = 620;
@@ -643,6 +673,7 @@ function updateMap(data, mappings) {
   popups = {}; // Map: {[rowid]: L.marker or L.geoJSON layer}
   geoJSONLayers = {};
   geoJSONStyles = {};
+  labelTooltipRefs = [];
   const mainLayerGroups = {}; // { layerName: L.featureGroup } — from main table's Layer column
   const isLayerMode = isGeoJSONMode && mappings && Layer in mappings && mappings[Layer];
 
@@ -650,7 +681,7 @@ function updateMap(data, mappings) {
     // GeoJSON mode — group features by Layer column value
 
     for (const rec of data) {
-      const { id, name, geojson, style: rawStyle, layer: layerName, label, bearing } = getInfo(rec);
+      const { id, name, geojson, style: rawStyle, layer: layerName, label, labelStyle } = getInfo(rec);
 
       if (!geojson) {
         continue;
@@ -703,15 +734,35 @@ function updateMap(data, mappings) {
       // Add permanent label tooltip if Label column is mapped
       if (label) {
         var tooltipContent = DOMPurify.sanitize(String(label));
-        if (bearing != null && bearing !== '') {
+        var labelOpts = {};
+        if (labelStyle) {
+          try {
+            labelOpts = typeof labelStyle === 'string' ? JSON.parse(labelStyle) : labelStyle;
+          } catch (e) {
+            console.error("Invalid LabelStyle JSON for row", id, ":", e);
+          }
+        }
+        // Apply bearing rotation on inner span (avoids overwriting Leaflet's translate3d)
+        if (labelOpts.bearing != null) {
           tooltipContent = '<span style="display:inline-block;transform:rotate('
-            + Number(bearing) + 'deg)">' + tooltipContent + '</span>';
+            + Number(labelOpts.bearing) + 'deg)">' + tooltipContent + '</span>';
         }
         layer.eachLayer(function (sublayer) {
           sublayer.bindTooltip(tooltipContent, {
             permanent: true,
             direction: 'center',
             className: 'polygon-label',
+          });
+          // Track for zoom-dependent updates
+          labelTooltipRefs.push({ sublayer: sublayer, opts: labelOpts });
+          // Apply static styles via tooltipopen event
+          sublayer.on('tooltipopen', function () {
+            var el = sublayer.getTooltip().getElement();
+            if (!el) return;
+            if (labelOpts.fontSize) el.style.fontSize = labelOpts.fontSize + 'px';
+            if (labelOpts.color) el.style.color = labelOpts.color;
+            if (labelOpts.fontWeight) el.style.fontWeight = labelOpts.fontWeight;
+            if (labelOpts.opacity != null) el.style.opacity = labelOpts.opacity;
           });
         });
       }
@@ -984,7 +1035,7 @@ function defaultMapping(record, mappings) {
       [Layer]: hasCol(Layer, record) ? Layer : null,
       [Popup]: hasCol(Popup, record) ? Popup : null,
       [Label]: hasCol(Label, record) ? Label : null,
-      [Bearing]: hasCol(Bearing, record) ? Bearing : null,
+      [LabelStyle]: hasCol(LabelStyle, record) ? LabelStyle : null,
     };
   }
   return mappings;
@@ -1149,11 +1200,11 @@ grist.ready({
       description: "Permanent text label displayed on each feature.",
     },
     {
-      name: "Bearing",
-      type: "Numeric",
-      title: "Bearing",
+      name: "LabelStyle",
+      type: "Text",
+      title: "Label Style",
       optional,
-      description: "Rotation angle in degrees for the label text.",
+      description: 'JSON style for labels. Supported properties: bearing (rotation degrees), fontSize (px), color, fontWeight, opacity, dynamicSize (bool), referenceZoom (for dynamic sizing), minZoom, maxZoom.',
     },
   ],
   allowSelectBy: true,
