@@ -653,14 +653,20 @@ function updateMap(data, mappings) {
         continue;
       }
       el.style.display = '';
-      // Dynamic font size scaling — target inner span if present (it has inline font-size)
+      // Dynamic font size scaling — rebuild tooltip HTML with new size and use setContent()
+      // (tooltip.update() resets innerHTML from stored content, so we must update stored content)
       if (opts.dynamicSize && opts.fontSize) {
         var refZoom = opts.referenceZoom || 18;
         var scale = Math.pow(2, currentZoom - refZoom);
-        var dynamicFontSize = (opts.fontSize * scale) + 'px';
-        var innerSpan = el.querySelector('span');
-        if (innerSpan) { innerSpan.style.fontSize = dynamicFontSize; }
-        else { el.style.fontSize = dynamicFontSize; }
+        var dynamicFontSize = opts.fontSize * scale;
+        var styles = ['display:inline-block'];
+        if (opts.bearing != null) styles.push('transform:rotate(' + Number(opts.bearing) + 'deg)');
+        styles.push('font-size:' + dynamicFontSize + 'px');
+        if (opts.color) styles.push('color:' + opts.color);
+        if (opts.fontWeight) styles.push('font-weight:' + opts.fontWeight);
+        if (opts.opacity != null) styles.push('opacity:' + opts.opacity);
+        var newContent = '<span style="' + styles.join(';') + '">' + ref.labelText + '</span>';
+        tooltip.setContent(newContent);
       }
     }
   });
@@ -763,7 +769,7 @@ function updateMap(data, mappings) {
             className: 'polygon-label',
           });
           // Track for zoom-dependent updates (dynamic sizing, min/max zoom)
-          labelTooltipRefs.push({ sublayer: sublayer, opts: labelOpts });
+          labelTooltipRefs.push({ sublayer: sublayer, opts: labelOpts, labelText: DOMPurify.sanitize(String(label)) });
         });
       }
 
@@ -781,11 +787,6 @@ function updateMap(data, mappings) {
     // Add all layer groups to the map
     for (const groupName in mainLayerGroups) {
       map.addLayer(mainLayerGroups[groupName]);
-    }
-
-    // Fire zoomend once to set initial dynamic label sizes
-    if (labelTooltipRefs.length > 0) {
-      map.fireEvent('zoomend');
     }
 
     clearGeoJSONLayers = () => {
@@ -907,6 +908,12 @@ function updateMap(data, mappings) {
       console.warn('cannot fit bounds');
     }
   }
+
+  // Fire zoomend once to set initial dynamic label sizes (must be after setView/fitBounds)
+  if (labelTooltipRefs.length > 0) {
+    map.fireEvent('zoomend');
+  }
+
   function makeSureSelectedMarkerIsShown() {
     const rowId = selectedRowId;
 
