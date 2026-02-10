@@ -605,7 +605,14 @@ function updateMap(data, mappings) {
 
   const error = document.querySelector('.error');
   if (error) { error.remove(); }
+  // Preserve the current map view (center + zoom) so data edits don't reset it
+  let savedCenter = null;
+  let savedZoom = null;
   if (amap) {
+    try {
+      savedCenter = amap.getCenter();
+      savedZoom = amap.getZoom();
+    } catch (e) { /* ignore */ }
     try {
       amap.off();
       amap.remove();
@@ -790,11 +797,13 @@ function updateMap(data, mappings) {
         additionalLayerGroups[layerConfig.layerName] = group;
       }
 
-      // Re-fit bounds with additional points included
-      try {
-        map.fitBounds(new L.LatLngBounds(points), {maxZoom: 20, padding: [0, 0]});
-      } catch (err) {
-        console.warn('cannot fit bounds');
+      // Re-fit bounds with additional points (only on first load)
+      if (!savedCenter) {
+        try {
+          map.fitBounds(new L.LatLngBounds(points), {maxZoom: 20, padding: [0, 0]});
+        } catch (err) {
+          console.warn('cannot fit bounds');
+        }
       }
     }
 
@@ -810,10 +819,15 @@ function updateMap(data, mappings) {
     addLayerControl(map, mainLayerGroups, {}, isLayerMode, 'Layers');
   });
 
-  try {
-    map.fitBounds(new L.LatLngBounds(points), {maxZoom: 20, padding: [0, 0]});
-  } catch (err) {
-    console.warn('cannot fit bounds');
+  // Restore previous view if available, otherwise fit to data bounds
+  if (savedCenter && savedZoom !== null) {
+    map.setView(savedCenter, savedZoom);
+  } else {
+    try {
+      map.fitBounds(new L.LatLngBounds(points), {maxZoom: 20, padding: [0, 0]});
+    } catch (err) {
+      console.warn('cannot fit bounds');
+    }
   }
   function makeSureSelectedMarkerIsShown() {
     const rowId = selectedRowId;
