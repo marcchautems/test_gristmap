@@ -59,6 +59,11 @@ html, body, #map {
   box-sizing: border-box;
 }
 
+/* White background when tiles don't cover the area (e.g. beyond native zoom) */
+.leaflet-container {
+  background: #fff;
+}
+
 /* Grouped layer control */
 .leaflet-control-layers-group-header {
   display: flex;
