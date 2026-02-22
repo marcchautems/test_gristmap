@@ -560,6 +560,22 @@ function addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMod
   }
 }
 
+// Returns one L.LatLng centroid per polygon part in a GeoJSON Polygon or MultiPolygon geometry.
+// Used to place per-part label markers (Leaflet renders MultiPolygon as a single L.Polygon,
+// so layer.eachLayer() only yields one sublayer — we must compute part centroids ourselves).
+function getPolygonPartCentroids(geojson) {
+  var geometry = geojson && geojson.type === 'Feature' ? geojson.geometry : geojson;
+  if (!geometry || !geometry.coordinates) return [];
+  var parts = geometry.type === 'Polygon' ? [geometry.coordinates]
+             : geometry.type === 'MultiPolygon' ? geometry.coordinates : [];
+  return parts.map(function (polyCoords) {
+    var ring = polyCoords[0]; // exterior ring only
+    var sumLat = 0, sumLng = 0;
+    for (var i = 0; i < ring.length; i++) { sumLng += ring[i][0]; sumLat += ring[i][1]; }
+    return L.latLng(sumLat / ring.length, sumLng / ring.length);
+  });
+}
+
 // Function to clear last added markers. Used to clear the map when new record is selected.
 let clearMarkers = () => {};
 let clearGeoJSONLayers = () => {};
@@ -740,10 +756,23 @@ function updateMap(data, mappings) {
         },
       });
 
+      // Add to the appropriate layer group (must be before label block so centroid markers
+      // can also be added to the same group)
+      const groupName = (isLayerMode && layerName) ? String(layerName) : "Default";
+      if (!mainLayerGroups[groupName]) {
+        mainLayerGroups[groupName] = L.featureGroup();
+      }
+      mainLayerGroups[groupName].addLayer(layer);
+
+      geoJSONLayers[id] = layer;
+      popups[id] = layer;
+
       // Add permanent label tooltip if Label column is mapped.
-      // Label and LabelStyle can each be a JSON array for per-part labels on multipolygons.
+      // NOTE: Leaflet renders MultiPolygon as a single L.Polygon (one sublayer), so
+      // layer.eachLayer() only yields one item. For per-part labels (array), we compute
+      // centroids from the raw GeoJSON and place invisible markers instead.
       if (label) {
-        // Parse label: JSON array → per-part labels, plain string → same for all parts
+        // Parse label: JSON array → per-part centroid markers; plain string → bind to whole layer
         var labelArray = null;
         var labelSingle = DOMPurify.sanitize(String(label));
         try {
@@ -751,7 +780,7 @@ function updateMap(data, mappings) {
           if (Array.isArray(parsedLabel)) { labelArray = parsedLabel; }
         } catch (e) { /* plain string, not a JSON array */ }
 
-        // Parse labelStyle: JSON array → per-part styles, single object → same for all parts
+        // Parse labelStyle: JSON array → per-part styles; single object → same for all parts
         var labelOptsDefault = {};
         var labelOptsArray = null;
         if (labelStyle) {
@@ -764,43 +793,51 @@ function updateMap(data, mappings) {
           }
         }
 
-        var sublayerIndex = 0;
-        layer.eachLayer(function (sublayer) {
-          var idx = sublayerIndex++;
-          var thisText = labelArray ? DOMPurify.sanitize(String(labelArray[idx] || '')) : labelSingle;
-          var thisOpts = labelOptsArray ? (labelOptsArray[idx] || {}) : labelOptsDefault;
-          if (!thisText) { return; }
-
-          // Build inline styles
-          var inlineStyles = ['display:inline-block'];
-          if (thisOpts.bearing != null) inlineStyles.push('transform:rotate(' + Number(thisOpts.bearing) + 'deg)');
-          if (thisOpts.fontSize) inlineStyles.push('font-size:' + thisOpts.fontSize + 'px');
-          if (thisOpts.color) inlineStyles.push('color:' + thisOpts.color);
-          if (thisOpts.fontWeight) inlineStyles.push('font-weight:' + thisOpts.fontWeight);
-          if (thisOpts.opacity != null) inlineStyles.push('opacity:' + thisOpts.opacity);
-          var thisContent = inlineStyles.length > 1
-            ? '<span style="' + inlineStyles.join(';') + '">' + thisText + '</span>'
-            : thisText;
-
-          sublayer.bindTooltip(thisContent, {
-            permanent: true,
-            direction: 'center',
-            className: 'polygon-label',
+        if (labelArray) {
+          // Per-part: one invisible centroid marker per polygon part, each with its own label
+          var centroids = getPolygonPartCentroids(parsedGeoJSON);
+          for (var pi = 0; pi < Math.min(centroids.length, labelArray.length); pi++) {
+            var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
+            if (!thisText) { continue; }
+            var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
+            var inlineStyles = ['display:inline-block'];
+            if (thisOpts.bearing != null) inlineStyles.push('transform:rotate(' + Number(thisOpts.bearing) + 'deg)');
+            if (thisOpts.fontSize) inlineStyles.push('font-size:' + thisOpts.fontSize + 'px');
+            if (thisOpts.color) inlineStyles.push('color:' + thisOpts.color);
+            if (thisOpts.fontWeight) inlineStyles.push('font-weight:' + thisOpts.fontWeight);
+            if (thisOpts.opacity != null) inlineStyles.push('opacity:' + thisOpts.opacity);
+            var thisContent = inlineStyles.length > 1
+              ? '<span style="' + inlineStyles.join(';') + '">' + thisText + '</span>'
+              : thisText;
+            var centroidMarker = L.marker(centroids[pi], {
+              icon: L.divIcon({ className: '', iconSize: [0, 0] }),
+              interactive: false,
+            });
+            centroidMarker.bindTooltip(thisContent, {
+              permanent: true, direction: 'center', className: 'polygon-label',
+            });
+            mainLayerGroups[groupName].addLayer(centroidMarker);
+            labelTooltipRefs.push({ sublayer: centroidMarker, opts: thisOpts, labelText: thisText });
+          }
+        } else {
+          // Single label: bind tooltip directly to the (combined) GeoJSON sublayer
+          layer.eachLayer(function (sublayer) {
+            var inlineStyles = ['display:inline-block'];
+            if (labelOptsDefault.bearing != null) inlineStyles.push('transform:rotate(' + Number(labelOptsDefault.bearing) + 'deg)');
+            if (labelOptsDefault.fontSize) inlineStyles.push('font-size:' + labelOptsDefault.fontSize + 'px');
+            if (labelOptsDefault.color) inlineStyles.push('color:' + labelOptsDefault.color);
+            if (labelOptsDefault.fontWeight) inlineStyles.push('font-weight:' + labelOptsDefault.fontWeight);
+            if (labelOptsDefault.opacity != null) inlineStyles.push('opacity:' + labelOptsDefault.opacity);
+            var thisContent = inlineStyles.length > 1
+              ? '<span style="' + inlineStyles.join(';') + '">' + labelSingle + '</span>'
+              : labelSingle;
+            sublayer.bindTooltip(thisContent, {
+              permanent: true, direction: 'center', className: 'polygon-label',
+            });
+            labelTooltipRefs.push({ sublayer: sublayer, opts: labelOptsDefault, labelText: labelSingle });
           });
-          // Track for zoom-dependent updates (dynamic sizing, min/max zoom)
-          labelTooltipRefs.push({ sublayer: sublayer, opts: thisOpts, labelText: thisText });
-        });
+        }
       }
-
-      // Add to the appropriate layer group
-      const groupName = (isLayerMode && layerName) ? String(layerName) : "Default";
-      if (!mainLayerGroups[groupName]) {
-        mainLayerGroups[groupName] = L.featureGroup();
-      }
-      mainLayerGroups[groupName].addLayer(layer);
-
-      geoJSONLayers[id] = layer;
-      popups[id] = layer;
     }
 
     // Add all layer groups to the map
