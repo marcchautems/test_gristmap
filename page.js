@@ -560,20 +560,45 @@ function addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMod
   }
 }
 
-// Returns one L.LatLng centroid per polygon part in a GeoJSON Polygon or MultiPolygon geometry.
-// Used to place per-part label markers (Leaflet renders MultiPolygon as a single L.Polygon,
-// so layer.eachLayer() only yields one sublayer — we must compute part centroids ourselves).
-function getPolygonPartCentroids(geojson) {
-  var geometry = geojson && geojson.type === 'Feature' ? geojson.geometry : geojson;
-  if (!geometry || !geometry.coordinates) return [];
-  var parts = geometry.type === 'Polygon' ? [geometry.coordinates]
-             : geometry.type === 'MultiPolygon' ? geometry.coordinates : [];
-  return parts.map(function (polyCoords) {
-    var ring = polyCoords[0]; // exterior ring only
-    var sumLat = 0, sumLng = 0;
-    for (var i = 0; i < ring.length; i++) { sumLng += ring[i][0]; sumLat += ring[i][1]; }
-    return L.latLng(sumLat / ring.length, sumLng / ring.length);
-  });
+// Compute the centroid of a ring (array of L.LatLng).
+function computeRingCentroid(ring) {
+  var sumLat = 0, sumLng = 0;
+  for (var i = 0; i < ring.length; i++) { sumLat += ring[i].lat; sumLng += ring[i].lng; }
+  return L.latLng(sumLat / ring.length, sumLng / ring.length);
+}
+
+// Return one L.LatLng centroid per polygon part from a Leaflet polygon sublayer.
+// Works for Leaflet's MultiPolygon representation: Leaflet renders MultiPolygon as a single
+// L.Polygon whose getLatLngs() returns a depth-3 array [part0_rings, part1_rings, ...].
+// For a simple Polygon, getLatLngs() returns a depth-2 array [ring0, ring1, ...].
+function getSublayerPartCentroids(sublayer) {
+  if (!sublayer || typeof sublayer.getLatLngs !== 'function') return [];
+  var latlngs = sublayer.getLatLngs();
+  if (!latlngs || latlngs.length === 0) return [];
+  // MultiPolygon: latlngs[0] is one polygon part's ring array → latlngs[0][0] is an Array (a ring)
+  // Polygon:      latlngs[0] is a ring (Array of LatLng) → latlngs[0][0] is a LatLng (not Array)
+  var isMultiPoly = Array.isArray(latlngs[0]) && latlngs[0].length > 0 && Array.isArray(latlngs[0][0]);
+  if (isMultiPoly) {
+    return latlngs.map(function(part) { return computeRingCentroid(part[0]); });
+  } else {
+    var ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
+    return [computeRingCentroid(ring)];
+  }
+}
+
+// Build the HTML content for a permanent label tooltip.
+// fontSizeOverride replaces opts.fontSize (used in zoomend for dynamic sizing).
+function buildLabelHtml(text, opts, fontSizeOverride) {
+  var styles = ['display:inline-block'];
+  if (opts.bearing != null) styles.push('transform:rotate(' + Number(opts.bearing) + 'deg)');
+  var fs = (fontSizeOverride != null) ? fontSizeOverride : opts.fontSize;
+  if (fs) styles.push('font-size:' + fs + 'px');
+  if (opts.color) styles.push('color:' + opts.color);
+  if (opts.fontWeight) styles.push('font-weight:' + opts.fontWeight);
+  if (opts.opacity != null) styles.push('opacity:' + opts.opacity);
+  return styles.length > 1
+    ? '<span style="' + styles.join(';') + '">' + text + '</span>'
+    : text;
 }
 
 // Function to clear last added markers. Used to clear the map when new record is selected.
@@ -673,16 +698,8 @@ function updateMap(data, mappings) {
       // (tooltip.update() resets innerHTML from stored content, so we must update stored content)
       if (opts.dynamicSize && opts.fontSize) {
         var refZoom = opts.referenceZoom || 18;
-        var scale = Math.pow(2, currentZoom - refZoom);
-        var dynamicFontSize = opts.fontSize * scale;
-        var styles = ['display:inline-block'];
-        if (opts.bearing != null) styles.push('transform:rotate(' + Number(opts.bearing) + 'deg)');
-        styles.push('font-size:' + dynamicFontSize + 'px');
-        if (opts.color) styles.push('color:' + opts.color);
-        if (opts.fontWeight) styles.push('font-weight:' + opts.fontWeight);
-        if (opts.opacity != null) styles.push('opacity:' + opts.opacity);
-        var newContent = '<span style="' + styles.join(';') + '">' + ref.labelText + '</span>';
-        tooltip.setContent(newContent);
+        var dynamicFontSize = opts.fontSize * Math.pow(2, currentZoom - refZoom);
+        tooltip.setContent(buildLabelHtml(ref.labelText, opts, dynamicFontSize));
       }
     }
   });
@@ -768,9 +785,6 @@ function updateMap(data, mappings) {
       popups[id] = layer;
 
       // Add permanent label tooltip if Label column is mapped.
-      // NOTE: Leaflet renders MultiPolygon as a single L.Polygon (one sublayer), so
-      // layer.eachLayer() only yields one item. For per-part labels (array), we compute
-      // centroids from the raw GeoJSON and place invisible markers instead.
       if (label) {
         // Parse label: JSON array → per-part centroid markers; plain string → bind to whole layer
         var labelArray = null;
@@ -794,44 +808,45 @@ function updateMap(data, mappings) {
         }
 
         if (labelArray) {
-          // Per-part: one invisible centroid marker per polygon part, each with its own label
-          var centroids = getPolygonPartCentroids(parsedGeoJSON);
-          for (var pi = 0; pi < Math.min(centroids.length, labelArray.length); pi++) {
-            var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
-            if (!thisText) { continue; }
-            var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
-            var inlineStyles = ['display:inline-block'];
-            if (thisOpts.bearing != null) inlineStyles.push('transform:rotate(' + Number(thisOpts.bearing) + 'deg)');
-            if (thisOpts.fontSize) inlineStyles.push('font-size:' + thisOpts.fontSize + 'px');
-            if (thisOpts.color) inlineStyles.push('color:' + thisOpts.color);
-            if (thisOpts.fontWeight) inlineStyles.push('font-weight:' + thisOpts.fontWeight);
-            if (thisOpts.opacity != null) inlineStyles.push('opacity:' + thisOpts.opacity);
-            var thisContent = inlineStyles.length > 1
-              ? '<span style="' + inlineStyles.join(';') + '">' + thisText + '</span>'
-              : thisText;
-            var centroidMarker = L.marker(centroids[pi], {
-              icon: L.divIcon({ className: '', iconSize: [0, 0] }),
-              interactive: false,
-            });
-            centroidMarker.bindTooltip(thisContent, {
-              permanent: true, direction: 'center', className: 'polygon-label',
-            });
-            mainLayerGroups[groupName].addLayer(centroidMarker);
-            labelTooltipRefs.push({ sublayer: centroidMarker, opts: thisOpts, labelText: thisText });
+          // Collect sublayers: L.geoJSON yields N sublayers for a FeatureCollection,
+          // but only 1 for a MultiPolygon (Leaflet merges all parts into one L.Polygon).
+          var sublayers = [];
+          layer.eachLayer(function(sl) { sublayers.push(sl); });
+
+          if (sublayers.length > 1) {
+            // FeatureCollection case: bind tooltip directly to each feature sublayer by index.
+            for (var pi = 0; pi < Math.min(sublayers.length, labelArray.length); pi++) {
+              var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
+              if (!thisText) { continue; }
+              var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
+              sublayers[pi].bindTooltip(buildLabelHtml(thisText, thisOpts), {
+                permanent: true, direction: 'center', className: 'polygon-label',
+              });
+              labelTooltipRefs.push({ sublayer: sublayers[pi], opts: thisOpts, labelText: thisText });
+            }
+          } else if (sublayers.length === 1) {
+            // MultiPolygon case: compute per-part centroids from Leaflet's parsed latlngs,
+            // then place an invisible centroid marker with a permanent tooltip for each part.
+            var partCentroids = getSublayerPartCentroids(sublayers[0]);
+            for (var pi = 0; pi < Math.min(partCentroids.length, labelArray.length); pi++) {
+              var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
+              if (!thisText) { continue; }
+              var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
+              var centroidMarker = L.marker(partCentroids[pi], {
+                icon: L.divIcon({ className: '', iconSize: [0, 0] }),
+                interactive: false,
+              });
+              centroidMarker.bindTooltip(buildLabelHtml(thisText, thisOpts), {
+                permanent: true, direction: 'center', className: 'polygon-label',
+              });
+              mainLayerGroups[groupName].addLayer(centroidMarker);
+              labelTooltipRefs.push({ sublayer: centroidMarker, opts: thisOpts, labelText: thisText });
+            }
           }
         } else {
-          // Single label: bind tooltip directly to the (combined) GeoJSON sublayer
-          layer.eachLayer(function (sublayer) {
-            var inlineStyles = ['display:inline-block'];
-            if (labelOptsDefault.bearing != null) inlineStyles.push('transform:rotate(' + Number(labelOptsDefault.bearing) + 'deg)');
-            if (labelOptsDefault.fontSize) inlineStyles.push('font-size:' + labelOptsDefault.fontSize + 'px');
-            if (labelOptsDefault.color) inlineStyles.push('color:' + labelOptsDefault.color);
-            if (labelOptsDefault.fontWeight) inlineStyles.push('font-weight:' + labelOptsDefault.fontWeight);
-            if (labelOptsDefault.opacity != null) inlineStyles.push('opacity:' + labelOptsDefault.opacity);
-            var thisContent = inlineStyles.length > 1
-              ? '<span style="' + inlineStyles.join(';') + '">' + labelSingle + '</span>'
-              : labelSingle;
-            sublayer.bindTooltip(thisContent, {
+          // Single label: bind tooltip directly to each sublayer
+          layer.eachLayer(function(sublayer) {
+            sublayer.bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
               permanent: true, direction: 'center', className: 'polygon-label',
             });
             labelTooltipRefs.push({ sublayer: sublayer, opts: labelOptsDefault, labelText: labelSingle });
