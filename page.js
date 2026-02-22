@@ -740,36 +740,55 @@ function updateMap(data, mappings) {
         },
       });
 
-      // Add permanent label tooltip if Label column is mapped
+      // Add permanent label tooltip if Label column is mapped.
+      // Label and LabelStyle can each be a JSON array for per-part labels on multipolygons.
       if (label) {
-        var tooltipContent = DOMPurify.sanitize(String(label));
-        var labelOpts = {};
+        // Parse label: JSON array → per-part labels, plain string → same for all parts
+        var labelArray = null;
+        var labelSingle = DOMPurify.sanitize(String(label));
+        try {
+          var parsedLabel = JSON.parse(label);
+          if (Array.isArray(parsedLabel)) { labelArray = parsedLabel; }
+        } catch (e) { /* plain string, not a JSON array */ }
+
+        // Parse labelStyle: JSON array → per-part styles, single object → same for all parts
+        var labelOptsDefault = {};
+        var labelOptsArray = null;
         if (labelStyle) {
           try {
-            labelOpts = typeof labelStyle === 'string' ? JSON.parse(labelStyle) : labelStyle;
+            var parsedStyle = typeof labelStyle === 'string' ? JSON.parse(labelStyle) : labelStyle;
+            if (Array.isArray(parsedStyle)) { labelOptsArray = parsedStyle; }
+            else { labelOptsDefault = parsedStyle; }
           } catch (e) {
             console.error("Invalid LabelStyle JSON for row", id, ":", e);
           }
         }
-        // Build inline styles for the label span (all styles go in HTML to avoid
-        // relying on tooltipopen event, which doesn't fire for already-open permanent tooltips)
-        var inlineStyles = ['display:inline-block'];
-        if (labelOpts.bearing != null) inlineStyles.push('transform:rotate(' + Number(labelOpts.bearing) + 'deg)');
-        if (labelOpts.fontSize) inlineStyles.push('font-size:' + labelOpts.fontSize + 'px');
-        if (labelOpts.color) inlineStyles.push('color:' + labelOpts.color);
-        if (labelOpts.fontWeight) inlineStyles.push('font-weight:' + labelOpts.fontWeight);
-        if (labelOpts.opacity != null) inlineStyles.push('opacity:' + labelOpts.opacity);
-        if (inlineStyles.length > 1) {
-          tooltipContent = '<span style="' + inlineStyles.join(';') + '">' + tooltipContent + '</span>';
-        }
+
+        var sublayerIndex = 0;
         layer.eachLayer(function (sublayer) {
-          sublayer.bindTooltip(tooltipContent, {
+          var idx = sublayerIndex++;
+          var thisText = labelArray ? DOMPurify.sanitize(String(labelArray[idx] || '')) : labelSingle;
+          var thisOpts = labelOptsArray ? (labelOptsArray[idx] || {}) : labelOptsDefault;
+          if (!thisText) { return; }
+
+          // Build inline styles
+          var inlineStyles = ['display:inline-block'];
+          if (thisOpts.bearing != null) inlineStyles.push('transform:rotate(' + Number(thisOpts.bearing) + 'deg)');
+          if (thisOpts.fontSize) inlineStyles.push('font-size:' + thisOpts.fontSize + 'px');
+          if (thisOpts.color) inlineStyles.push('color:' + thisOpts.color);
+          if (thisOpts.fontWeight) inlineStyles.push('font-weight:' + thisOpts.fontWeight);
+          if (thisOpts.opacity != null) inlineStyles.push('opacity:' + thisOpts.opacity);
+          var thisContent = inlineStyles.length > 1
+            ? '<span style="' + inlineStyles.join(';') + '">' + thisText + '</span>'
+            : thisText;
+
+          sublayer.bindTooltip(thisContent, {
             permanent: true,
             direction: 'center',
             className: 'polygon-label',
           });
           // Track for zoom-dependent updates (dynamic sizing, min/max zoom)
-          labelTooltipRefs.push({ sublayer: sublayer, opts: labelOpts, labelText: DOMPurify.sanitize(String(label)) });
+          labelTooltipRefs.push({ sublayer: sublayer, opts: thisOpts, labelText: thisText });
         });
       }
 
