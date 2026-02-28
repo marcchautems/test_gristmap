@@ -578,16 +578,12 @@ function getSublayerPartCentroids(sublayer) {
   // MultiPolygon: latlngs[0] is one polygon part's ring array → latlngs[0][0] is an Array (a ring)
   // Polygon:      latlngs[0] is a ring (Array of LatLng) → latlngs[0][0] is a LatLng (not Array)
   var isMultiPoly = Array.isArray(latlngs[0]) && latlngs[0].length > 0 && Array.isArray(latlngs[0][0]);
-  console.log('[MapLabel] latlngs.length=' + latlngs.length + ' isMultiPoly=' + isMultiPoly);
-  var centroids;
   if (isMultiPoly) {
-    centroids = latlngs.map(function(part) { return computeRingCentroid(part[0]); });
+    return latlngs.map(function(part) { return computeRingCentroid(part[0]); });
   } else {
     var ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
-    centroids = [computeRingCentroid(ring)];
+    return [computeRingCentroid(ring)];
   }
-  console.log('[MapLabel] centroids count=' + centroids.length, centroids);
-  return centroids;
 }
 
 // Build the HTML content for a permanent label tooltip.
