@@ -578,12 +578,16 @@ function getSublayerPartCentroids(sublayer) {
   // MultiPolygon: latlngs[0] is one polygon part's ring array → latlngs[0][0] is an Array (a ring)
   // Polygon:      latlngs[0] is a ring (Array of LatLng) → latlngs[0][0] is a LatLng (not Array)
   var isMultiPoly = Array.isArray(latlngs[0]) && latlngs[0].length > 0 && Array.isArray(latlngs[0][0]);
+  console.log('[MapLabel] latlngs.length=' + latlngs.length + ' isMultiPoly=' + isMultiPoly);
+  var centroids;
   if (isMultiPoly) {
-    return latlngs.map(function(part) { return computeRingCentroid(part[0]); });
+    centroids = latlngs.map(function(part) { return computeRingCentroid(part[0]); });
   } else {
     var ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
-    return [computeRingCentroid(ring)];
+    centroids = [computeRingCentroid(ring)];
   }
+  console.log('[MapLabel] centroids count=' + centroids.length, centroids);
+  return centroids;
 }
 
 // Build the HTML content for a permanent label tooltip.
@@ -844,13 +848,44 @@ function updateMap(data, mappings) {
             }
           }
         } else {
-          // Single label: bind tooltip directly to each sublayer
-          layer.eachLayer(function(sublayer) {
-            sublayer.bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
-              permanent: true, direction: 'center', className: 'polygon-label',
-            });
-            labelTooltipRefs.push({ sublayer: sublayer, opts: labelOptsDefault, labelText: labelSingle });
-          });
+          // Single label: apply to every polygon part so the label is always visually on the geometry.
+          // For a FeatureCollection (N sublayers), bind directly to each.
+          // For a MultiPolygon (1 sublayer whose bounding-box center may fall between parts),
+          // compute per-part centroids and place a centroid marker for each part.
+          var singleSublayers = [];
+          layer.eachLayer(function(sl) { singleSublayers.push(sl); });
+
+          if (singleSublayers.length > 1) {
+            // FeatureCollection: bind same label to each feature sublayer
+            for (var si = 0; si < singleSublayers.length; si++) {
+              singleSublayers[si].bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
+                permanent: true, direction: 'center', className: 'polygon-label',
+              });
+              labelTooltipRefs.push({ sublayer: singleSublayers[si], opts: labelOptsDefault, labelText: labelSingle });
+            }
+          } else if (singleSublayers.length === 1) {
+            var singlePartCentroids = getSublayerPartCentroids(singleSublayers[0]);
+            if (singlePartCentroids.length <= 1) {
+              // Simple Polygon: bind directly (direction:'center' uses getCenter() correctly)
+              singleSublayers[0].bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
+                permanent: true, direction: 'center', className: 'polygon-label',
+              });
+              labelTooltipRefs.push({ sublayer: singleSublayers[0], opts: labelOptsDefault, labelText: labelSingle });
+            } else {
+              // MultiPolygon: place same label at each part's centroid
+              for (var ci = 0; ci < singlePartCentroids.length; ci++) {
+                var partMarker = L.marker(singlePartCentroids[ci], {
+                  icon: L.divIcon({ className: '', iconSize: [0, 0] }),
+                  interactive: false,
+                });
+                partMarker.bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
+                  permanent: true, direction: 'center', className: 'polygon-label',
+                });
+                mainLayerGroups[groupName].addLayer(partMarker);
+                labelTooltipRefs.push({ sublayer: partMarker, opts: labelOptsDefault, labelText: labelSingle });
+              }
+            }
+          }
         }
       }
     }
