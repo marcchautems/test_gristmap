@@ -1,5 +1,5 @@
 #map {
-  width: 100vw; 
+  width: 100vw;
   height: 100vh;
 }
 
@@ -59,8 +59,9 @@ html, body, #map {
   box-sizing: border-box;
 }
 
-/* White background when tiles don't cover the area (e.g. beyond native zoom) */
-.leaflet-container {
+/* White background when tiles don't cover the area (e.g. beyond native zoom).
+   Must use #map.leaflet-container (specificity 110) to beat the #map rule above (specificity 100). */
+#map.leaflet-container {
   background: #fff;
 }
 
