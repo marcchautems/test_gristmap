@@ -674,6 +674,16 @@ function updateMap(data, mappings) {
     savedMapView = { center: map.getCenter(), zoom: map.getZoom() };
   });
 
+  // Hide basemap tiles above their native max zoom so the background stays clean white.
+  // Without this, Leaflet keeps scaled-up lower-zoom tiles partially visible.
+  map.on('zoomend', function () {
+    if (map.getZoom() > 19) {
+      if (map.hasLayer(tiles)) { map.removeLayer(tiles); }
+    } else {
+      if (!map.hasLayer(tiles)) { map.addLayer(tiles); }
+    }
+  });
+
   // Handle dynamic label sizing and min/max zoom visibility
   map.on('zoomend', function () {
     var currentZoom = map.getZoom();
