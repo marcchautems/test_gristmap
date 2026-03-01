@@ -640,32 +640,41 @@ function passesDateFilter(rec) {
 }
 
 // Lightweight show/hide of existing layers — called by slider without rebuilding the map.
+// Uses opacity/CSS toggling instead of addLayer/removeLayer to avoid SVG DOM churn.
 function applyDateFilter() {
-  // GeoJSON mode: toggle each record's layer and its centroid label markers
+  // GeoJSON mode: toggle opacity on path layers, hide/show tooltip containers directly
   for (const id in geoJSONLayers) {
     const layer = geoJSONLayers[id];
-    const group = geoJSONLayerGroups[id];
-    if (!layer || !group) continue;
     const rec = mappedRecordsById[id];
     const visible = !rec || passesDateFilter(rec);
-    if (visible) {
-      if (!group.hasLayer(layer)) group.addLayer(layer);
-    } else {
-      if (group.hasLayer(layer)) group.removeLayer(layer);
-    }
-    // Centroid label markers must follow their parent feature
-    const cms = centroidMarkersById[id];
-    if (cms) {
-      for (const cm of cms) {
-        if (visible) {
-          if (!group.hasLayer(cm)) group.addLayer(cm);
-        } else {
-          if (group.hasLayer(cm)) group.removeLayer(cm);
-        }
+
+    // Toggle geometry: opacity change is pure CSS — no DOM insertion/removal
+    if (typeof layer.setStyle === 'function') {
+      if (visible) {
+        const baseOp = (id == selectedRowId) ? 0.6 : 0.3;
+        layer.setStyle(Object.assign({ opacity: baseOp, fillOpacity: baseOp }, geoJSONStyles[id] || {}));
+      } else {
+        layer.setStyle({ opacity: 0, fillOpacity: 0 });
       }
     }
+
+    // Toggle tooltips bound directly to FeatureCollection sublayers
+    if (typeof layer.eachLayer === 'function') {
+      layer.eachLayer(function(sublayer) {
+        const tt = sublayer.getTooltip && sublayer.getTooltip();
+        if (tt && tt._container) tt._container.style.display = visible ? '' : 'none';
+      });
+    }
+
+    // Toggle centroid label marker tooltips (MultiPolygon labels)
+    const cms = centroidMarkersById[id] || [];
+    for (const cm of cms) {
+      const tt = cm.getTooltip && cm.getTooltip();
+      if (tt && tt._container) tt._container.style.display = visible ? '' : 'none';
+    }
   }
-  // Coordinate mode: toggle markers inside the cluster group
+
+  // Coordinate mode: use addLayer/removeLayer for accurate cluster counts
   if (markers && typeof markers.hasLayer === 'function') {
     for (const id in popups) {
       if (geoJSONLayers[id]) continue; // already handled above
