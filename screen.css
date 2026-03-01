@@ -108,3 +108,31 @@ html, body, #map {
 .marker-cluster-selected {
   border: 3px solid #16b378;
 }
+
+/* Time slider control */
+.time-slider-control {
+  background: white;
+  padding: 7px 10px;
+  border-radius: 4px;
+  box-shadow: 0 1px 5px rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.time-slider-control .ts-year-select {
+  font-size: 13px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.time-slider-control .ts-range {
+  width: 200px;
+  cursor: pointer;
+}
+.time-slider-control .ts-date-label {
+  font-size: 13px;
+  min-width: 95px;
+  color: #333;
+}

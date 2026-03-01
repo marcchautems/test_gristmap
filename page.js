@@ -35,6 +35,9 @@ const Popup = 'Popup';
 const Label = 'Label';
 // Optional - JSON style for the label (bearing, fontSize, color, fontWeight, dynamicSize, minZoom, maxZoom, opacity)
 const LabelStyle = 'LabelStyle';
+// Optional - start/end date columns for time-slider filtering
+const StartDate = 'StartDate';
+const EndDate = 'EndDate';
 let lastRecord;
 let lastRecords;
 let rawRecordsById = {};
@@ -292,8 +295,10 @@ function extractPointsFromGeoJSON(geojson) {
 
 // Fetch additional layers from other Grist tables based on config
 async function fetchAdditionalLayers() {
+  if (cachedAdditionalLayers !== null) { return cachedAdditionalLayers; }
   const results = [];
   if (!additionalLayersConfig || additionalLayersConfig.length === 0) {
+    cachedAdditionalLayers = results;
     return results;
   }
   for (const config of additionalLayersConfig) {
@@ -340,6 +345,7 @@ async function fetchAdditionalLayers() {
       console.error("Error fetching additional table '" + config.table + "':", e);
     }
   }
+  cachedAdditionalLayers = results;
   return results;
 }
 
@@ -601,6 +607,96 @@ function buildLabelHtml(text, opts, fontSizeOverride) {
     : text;
 }
 
+// --- Time slider helpers ---
+
+function isLeapYear(year) {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+function daysInYear(year) { return isLeapYear(year) ? 366 : 365; }
+
+function getDayOfYearUTC(date) {
+  const start = Date.UTC(date.getUTCFullYear(), 0, 1);
+  return Math.floor((date.getTime() - start) / 86400000);
+}
+
+function formatSliderDate(year, dayOff) {
+  const d = new Date(Date.UTC(year, 0, 1 + dayOff));
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+function updateSliderTs() {
+  sliderDateTs = Date.UTC(sliderYear, 0, 1 + sliderDayOffset) / 1000;
+}
+
+const VERY_EARLY = -62135596800; // approx year 1 UTC — sentinel for missing StartDate
+const VERY_LATE  =  32503680000; // approx year 3000 UTC — sentinel for missing EndDate
+
+function passesDateFilter(rec) {
+  if (sliderDateTs === null) return true;
+  const start = (rec[StartDate] != null) ? rec[StartDate] : VERY_EARLY;
+  const end   = (rec[EndDate]   != null) ? rec[EndDate]   : VERY_LATE;
+  return start <= sliderDateTs && sliderDateTs <= end;
+}
+
+function createAndAddTimeSlider(map) {
+  const TimeSlider = L.Control.extend({
+    options: { position: 'topleft' },
+    onAdd: function () {
+      const container = L.DomUtil.create('div', 'time-slider-control');
+      L.DomEvent.disableClickPropagation(container);
+      L.DomEvent.disableScrollPropagation(container);
+
+      // Year dropdown
+      const select = L.DomUtil.create('select', 'ts-year-select', container);
+      for (let y = sliderMinYear; y <= sliderMaxYear; y++) {
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = y;
+        if (y === sliderYear) opt.selected = true;
+        select.appendChild(opt);
+      }
+
+      // Range slider
+      const range = L.DomUtil.create('input', 'ts-range', container);
+      range.type  = 'range';
+      range.min   = 0;
+      range.max   = daysInYear(sliderYear) - 1;
+      range.step  = 1;
+      range.value = sliderDayOffset;
+
+      // Date label
+      const dateLabel = L.DomUtil.create('span', 'ts-date-label', container);
+      dateLabel.textContent = formatSliderDate(sliderYear, sliderDayOffset);
+
+      // Year change: immediate map update
+      select.addEventListener('change', function () {
+        sliderYear = parseInt(this.value);
+        range.max = daysInYear(sliderYear) - 1;
+        sliderDayOffset = Math.min(sliderDayOffset, daysInYear(sliderYear) - 1);
+        range.value = sliderDayOffset;
+        updateSliderTs();
+        dateLabel.textContent = formatSliderDate(sliderYear, sliderDayOffset);
+        updateMap(lastRecords, lastMappings);
+      });
+
+      // Slider drag: debounced map update (label updates immediately)
+      range.addEventListener('input', function () {
+        sliderDayOffset = parseInt(this.value);
+        updateSliderTs();
+        dateLabel.textContent = formatSliderDate(sliderYear, sliderDayOffset);
+        clearTimeout(sliderUpdateTimer);
+        sliderUpdateTimer = setTimeout(() => updateMap(lastRecords, lastMappings), 50);
+      });
+
+      return container;
+    }
+  });
+  new TimeSlider().addTo(map);
+}
+
+// --- End time slider helpers ---
+
 // Function to clear last added markers. Used to clear the map when new record is selected.
 let clearMarkers = () => {};
 let clearGeoJSONLayers = () => {};
@@ -610,10 +706,19 @@ let geoJSONLayers = {};
 let geoJSONStyles = {};
 let labelTooltipRefs = []; // [{sublayer, opts}] — for zoom-dependent label updates
 let savedMapView = null; // { center, zoom } — persisted across updateMap calls via moveend event
+let sliderDateTs = null;       // Unix seconds (UTC); null = slider inactive
+let sliderYear = null;         // currently selected year
+let sliderDayOffset = 0;       // 0-based day index within the selected year
+let sliderMinYear = null;      // min year computed from data
+let sliderMaxYear = null;      // max year computed from data
+let lastMappings = null;       // preserved mappings for slider-triggered updateMap calls
+let sliderUpdateTimer = null;  // debounce timer for slider input
+let cachedAdditionalLayers = null; // cache so slider moves don't re-fetch layer data
 
 function updateMap(data, mappings) {
   data = data || selectedRecords;
   selectedRecords = data;
+  lastMappings = mappings;
   if (!data || data.length === 0) {
     showProblem("No data found yet");
     return;
@@ -733,6 +838,7 @@ function updateMap(data, mappings) {
     // GeoJSON mode — group features by Layer column value
 
     for (const rec of data) {
+      if (!passesDateFilter(rec)) { continue; }
       const { id, name, geojson, style: rawStyle, layer: layerName, label, labelStyle } = getInfo(rec);
 
       if (!geojson) {
@@ -931,6 +1037,7 @@ function updateMap(data, mappings) {
     });
 
     for (const rec of data) {
+      if (!passesDateFilter(rec)) { continue; }
       const { id, name, lng, lat } = getInfo(rec);
       // If the record is in the middle of geocoding, skip it.
       if (String(lng) === "...") {
@@ -1009,6 +1116,35 @@ function updateMap(data, mappings) {
     console.error("Error loading additional layers:", err);
     addLayerControl(map, mainLayerGroups, {}, isLayerMode, 'Layers');
   });
+
+  // Time slider: show only when both StartDate and EndDate columns are mapped
+  if (mappings && mappings[StartDate] && mappings[EndDate]) {
+    // Compute year range from all records (unfiltered data)
+    let minTs = Infinity, maxTs = -Infinity;
+    for (const rec of data) {
+      if (rec[StartDate] != null && rec[StartDate] < minTs) minTs = rec[StartDate];
+      if (rec[EndDate]   != null && rec[EndDate]   > maxTs) maxTs = rec[EndDate];
+    }
+    const currentYear = new Date().getUTCFullYear();
+    sliderMinYear = (minTs !== Infinity)  ? new Date(minTs * 1000).getUTCFullYear() : currentYear;
+    sliderMaxYear = (maxTs !== -Infinity) ? new Date(maxTs * 1000).getUTCFullYear() : currentYear;
+    sliderMinYear = Math.min(sliderMinYear, currentYear);
+    sliderMaxYear = Math.max(sliderMaxYear, currentYear);
+
+    // Initialize slider to today on first use
+    if (sliderDateTs === null) {
+      const now = new Date();
+      sliderYear = now.getUTCFullYear();
+      sliderDayOffset = getDayOfYearUTC(now);
+      updateSliderTs();
+    }
+    // Clamp selected year to valid range
+    sliderYear = Math.max(sliderMinYear, Math.min(sliderMaxYear, sliderYear));
+
+    createAndAddTimeSlider(map);
+  } else {
+    sliderDateTs = null; // deactivate filter when columns not mapped
+  }
 
   // Restore previous view if available, otherwise fit to data bounds
   if (!isFirstLoad) {
@@ -1205,6 +1341,8 @@ grist.onRecord((record, mappings) => {
   }
 });
 grist.onRecords((data, mappings) => {
+  cachedAdditionalLayers = null; // invalidate cache on real data change
+  lastMappings = mappings;
   rawRecordsById = {};
   for (const rec of data) { rawRecordsById[rec.id] = rec; }
   lastRecords = grist.mapColumnNames(data) || data;
@@ -1329,6 +1467,20 @@ grist.ready({
       title: "Label Style",
       optional,
       description: 'JSON style for labels. Supported properties: bearing (rotation degrees), fontSize (px), color, fontWeight, opacity, dynamicSize (bool), referenceZoom (for dynamic sizing), minZoom, maxZoom.',
+    },
+    {
+      name: "StartDate",
+      type: "Date",
+      title: "Start Date",
+      optional,
+      description: 'Start date for time-slider filtering. Features are shown when the slider date is on or after this date.',
+    },
+    {
+      name: "EndDate",
+      type: "Date",
+      title: "End Date",
+      optional,
+      description: 'End date for time-slider filtering. Features are shown when the slider date is on or before this date.',
     },
   ],
   allowSelectBy: true,
