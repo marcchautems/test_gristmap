@@ -639,6 +639,49 @@ function passesDateFilter(rec) {
   return start <= sliderDateTs && sliderDateTs <= end;
 }
 
+// Lightweight show/hide of existing layers — called by slider without rebuilding the map.
+function applyDateFilter() {
+  // GeoJSON mode: toggle each record's layer and its centroid label markers
+  for (const id in geoJSONLayers) {
+    const layer = geoJSONLayers[id];
+    const group = geoJSONLayerGroups[id];
+    if (!layer || !group) continue;
+    const rec = mappedRecordsById[id];
+    const visible = !rec || passesDateFilter(rec);
+    if (visible) {
+      if (!group.hasLayer(layer)) group.addLayer(layer);
+    } else {
+      if (group.hasLayer(layer)) group.removeLayer(layer);
+    }
+    // Centroid label markers must follow their parent feature
+    const cms = centroidMarkersById[id];
+    if (cms) {
+      for (const cm of cms) {
+        if (visible) {
+          if (!group.hasLayer(cm)) group.addLayer(cm);
+        } else {
+          if (group.hasLayer(cm)) group.removeLayer(cm);
+        }
+      }
+    }
+  }
+  // Coordinate mode: toggle markers inside the cluster group
+  if (markers && typeof markers.hasLayer === 'function') {
+    for (const id in popups) {
+      if (geoJSONLayers[id]) continue; // already handled above
+      const marker = popups[id];
+      const rec = mappedRecordsById[id];
+      if (!marker || !rec) continue;
+      const visible = passesDateFilter(rec);
+      if (visible) {
+        if (!markers.hasLayer(marker)) markers.addLayer(marker);
+      } else {
+        if (markers.hasLayer(marker)) markers.removeLayer(marker);
+      }
+    }
+  }
+}
+
 function createAndAddTimeSlider(map) {
   const TimeSlider = L.Control.extend({
     options: { position: 'topleft' },
@@ -669,7 +712,7 @@ function createAndAddTimeSlider(map) {
       const dateLabel = L.DomUtil.create('span', 'ts-date-label', container);
       dateLabel.textContent = formatSliderDate(sliderYear, sliderDayOffset);
 
-      // Year change: immediate map update
+      // Year change: update filter in-place (no map rebuild needed)
       select.addEventListener('change', function () {
         sliderYear = parseInt(this.value);
         range.max = daysInYear(sliderYear) - 1;
@@ -677,16 +720,15 @@ function createAndAddTimeSlider(map) {
         range.value = sliderDayOffset;
         updateSliderTs();
         dateLabel.textContent = formatSliderDate(sliderYear, sliderDayOffset);
-        updateMap(lastRecords, lastMappings);
+        applyDateFilter();
       });
 
-      // Slider drag: debounced map update (label updates immediately)
+      // Slider drag: update filter in-place (lightweight, no debounce needed)
       range.addEventListener('input', function () {
         sliderDayOffset = parseInt(this.value);
         updateSliderTs();
         dateLabel.textContent = formatSliderDate(sliderYear, sliderDayOffset);
-        clearTimeout(sliderUpdateTimer);
-        sliderUpdateTimer = setTimeout(() => updateMap(lastRecords, lastMappings), 50);
+        applyDateFilter();
       });
 
       return container;
@@ -705,6 +747,9 @@ let markers = [];
 let geoJSONLayers = {};
 let geoJSONStyles = {};
 let labelTooltipRefs = []; // [{sublayer, opts}] — for zoom-dependent label updates
+let geoJSONLayerGroups = {};   // id → L.featureGroup — which group each record's layer lives in
+let centroidMarkersById = {};  // id → [L.marker, ...] — invisible centroid label markers per record
+let mappedRecordsById = {};    // id → mapped record — used by applyDateFilter()
 let savedMapView = null; // { center, zoom } — persisted across updateMap calls via moveend event
 let sliderDateTs = null;       // Unix seconds (UTC); null = slider inactive
 let sliderYear = null;         // currently selected year
@@ -831,6 +876,9 @@ function updateMap(data, mappings) {
   geoJSONLayers = {};
   geoJSONStyles = {};
   labelTooltipRefs = [];
+  geoJSONLayerGroups = {};
+  centroidMarkersById = {};
+  mappedRecordsById = {};
   const mainLayerGroups = {}; // { layerName: L.featureGroup } — from main table's Layer column
   const isLayerMode = isGeoJSONMode && mappings && Layer in mappings && mappings[Layer];
 
@@ -838,7 +886,6 @@ function updateMap(data, mappings) {
     // GeoJSON mode — group features by Layer column value
 
     for (const rec of data) {
-      if (!passesDateFilter(rec)) { continue; }
       const { id, name, geojson, style: rawStyle, layer: layerName, label, labelStyle } = getInfo(rec);
 
       if (!geojson) {
@@ -898,6 +945,8 @@ function updateMap(data, mappings) {
       mainLayerGroups[groupName].addLayer(layer);
 
       geoJSONLayers[id] = layer;
+      geoJSONLayerGroups[id] = mainLayerGroups[groupName];
+      mappedRecordsById[id] = rec;
       popups[id] = layer;
 
       // Add permanent label tooltip if Label column is mapped.
@@ -956,6 +1005,8 @@ function updateMap(data, mappings) {
                 permanent: true, direction: 'center', className: 'polygon-label',
               });
               mainLayerGroups[groupName].addLayer(centroidMarker);
+              if (!centroidMarkersById[id]) centroidMarkersById[id] = [];
+              centroidMarkersById[id].push(centroidMarker);
               labelTooltipRefs.push({ sublayer: centroidMarker, opts: thisOpts, labelText: thisText });
             }
           }
@@ -994,6 +1045,8 @@ function updateMap(data, mappings) {
                   permanent: true, direction: 'center', className: 'polygon-label',
                 });
                 mainLayerGroups[groupName].addLayer(partMarker);
+                if (!centroidMarkersById[id]) centroidMarkersById[id] = [];
+                centroidMarkersById[id].push(partMarker);
                 labelTooltipRefs.push({ sublayer: partMarker, opts: labelOptsDefault, labelText: labelSingle });
               }
             }
@@ -1037,7 +1090,6 @@ function updateMap(data, mappings) {
     });
 
     for (const rec of data) {
-      if (!passesDateFilter(rec)) { continue; }
       const { id, name, lng, lat } = getInfo(rec);
       // If the record is in the middle of geocoding, skip it.
       if (String(lng) === "...") {
@@ -1062,6 +1114,7 @@ function updateMap(data, mappings) {
       markers.addLayer(marker);
 
       popups[id] = marker;
+      mappedRecordsById[id] = rec;
     }
     map.addLayer(markers);
 
@@ -1142,6 +1195,7 @@ function updateMap(data, mappings) {
     sliderYear = Math.max(sliderMinYear, Math.min(sliderMaxYear, sliderYear));
 
     createAndAddTimeSlider(map);
+    applyDateFilter();
   } else {
     sliderDateTs = null; // deactivate filter when columns not mapped
   }
