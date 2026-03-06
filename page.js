@@ -39,6 +39,7 @@ let lastRecord;
 let lastRecords;
 let rawRecordsById = {};
 let additionalLayersConfig = [];
+let lastKnownMappings = null; // cache last non-null mappings (Grist may send null on data-only updates)
 
 
 //Color markers downloaded from leaflet repo, color-shifted to green
@@ -1145,6 +1146,26 @@ function hasCol(col, anything) {
   return anything && typeof anything === 'object' && col in anything;
 }
 
+// Manually map raw Grist records to virtual column names using a mappings object.
+// Used as a fallback when grist.mapColumnNames() returns null (e.g. when Grist sends
+// null mappings on data-only updates, clearing the API's internal _mappings cache).
+function manualMapData(data, mappings) {
+  if (!mappings) return null;
+  return data.map(function(rec) {
+    var mapped = { id: rec.id };
+    for (var vCol in mappings) {
+      var rCol = mappings[vCol];
+      if (!rCol) { continue; }
+      if (Array.isArray(rCol)) {
+        mapped[vCol] = rCol.map(function(c) { return rec[c]; });
+      } else {
+        mapped[vCol] = rec[rCol];
+      }
+    }
+    return mapped;
+  });
+}
+
 function defaultMapping(record, mappings) {
   if (!mappings) {
     return {
@@ -1205,19 +1226,25 @@ grist.onRecord((record, mappings) => {
   }
 });
 grist.onRecords((data, mappings) => {
+  // Grist may send mappings=null on data-only updates (mappings unchanged).
+  // Cache the last non-null mappings so column mapping always works.
+  if (mappings) { lastKnownMappings = mappings; }
+  const effectiveMappings = mappings || lastKnownMappings;
   rawRecordsById = {};
   for (const rec of data) { rawRecordsById[rec.id] = rec; }
-  lastRecords = grist.mapColumnNames(data) || data;
+  // grist.mapColumnNames uses its internal _mappings which may be null when
+  // Grist sends null mappings; fall back to manual mapping using effectiveMappings.
+  lastRecords = grist.mapColumnNames(data) || manualMapData(data, effectiveMappings) || data;
   if (mode !== 'single') {
     // If mappings are not done, we will assume that table has correct columns.
     // This is done to support existing widgets which where configured by
     // renaming column names.
-    updateMap(lastRecords, mappings);
+    updateMap(lastRecords, effectiveMappings);
     if (lastRecord) {
-      selectOnMap(lastRecord, mappings);
+      selectOnMap(lastRecord, effectiveMappings);
     }
     // We need to mimic the mappings for old widgets
-    scanOnNeed(defaultMapping(data[0], mappings));
+    scanOnNeed(defaultMapping(data[0], effectiveMappings));
   }
 });
 
