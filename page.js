@@ -563,6 +563,7 @@ function addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMod
 
 // Compute the centroid of a ring (array of L.LatLng).
 function computeRingCentroid(ring) {
+  if (!ring || ring.length === 0) { return null; }
   var sumLat = 0, sumLng = 0;
   for (var i = 0; i < ring.length; i++) { sumLat += ring[i].lat; sumLng += ring[i].lng; }
   return L.latLng(sumLat / ring.length, sumLng / ring.length);
@@ -580,10 +581,11 @@ function getSublayerPartCentroids(sublayer) {
   // Polygon:      latlngs[0] is a ring (Array of LatLng) → latlngs[0][0] is a LatLng (not Array)
   var isMultiPoly = Array.isArray(latlngs[0]) && latlngs[0].length > 0 && Array.isArray(latlngs[0][0]);
   if (isMultiPoly) {
-    return latlngs.map(function(part) { return computeRingCentroid(part[0]); });
+    return latlngs.map(function(part) { return computeRingCentroid(part[0]); }).filter(Boolean);
   } else {
     var ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
-    return [computeRingCentroid(ring)];
+    var c = computeRingCentroid(ring);
+    return c ? [c] : [];
   }
 }
 
@@ -806,102 +808,106 @@ function updateMap(data, mappings) {
 
       // Add permanent label tooltip if Label column is mapped.
       if (label) {
-        // Parse label: JSON array → per-part centroid markers; plain string → bind to whole layer
-        var labelArray = null;
-        var labelSingle = DOMPurify.sanitize(String(label));
         try {
-          var parsedLabel = JSON.parse(label);
-          if (Array.isArray(parsedLabel)) { labelArray = parsedLabel; }
-        } catch (e) { /* plain string, not a JSON array */ }
-
-        // Parse labelStyle: JSON array → per-part styles; single object → same for all parts
-        var labelOptsDefault = {};
-        var labelOptsArray = null;
-        if (labelStyle) {
+          // Parse label: JSON array → per-part centroid markers; plain string → bind to whole layer
+          var labelArray = null;
+          var labelSingle = DOMPurify.sanitize(String(label));
           try {
-            var parsedStyle = typeof labelStyle === 'string' ? JSON.parse(labelStyle) : labelStyle;
-            if (Array.isArray(parsedStyle)) { labelOptsArray = parsedStyle; }
-            else { labelOptsDefault = parsedStyle; }
-          } catch (e) {
-            console.error("Invalid LabelStyle JSON for row", id, ":", e);
-          }
-        }
+            var parsedLabel = JSON.parse(label);
+            if (Array.isArray(parsedLabel)) { labelArray = parsedLabel; }
+          } catch (e) { /* plain string, not a JSON array */ }
 
-        if (labelArray) {
-          // Collect sublayers: L.geoJSON yields N sublayers for a FeatureCollection,
-          // but only 1 for a MultiPolygon (Leaflet merges all parts into one L.Polygon).
-          var sublayers = [];
-          layer.eachLayer(function(sl) { sublayers.push(sl); });
-
-          if (sublayers.length > 1) {
-            // FeatureCollection case: bind tooltip directly to each feature sublayer by index.
-            for (var pi = 0; pi < Math.min(sublayers.length, labelArray.length); pi++) {
-              var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
-              if (!thisText) { continue; }
-              var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
-              sublayers[pi].bindTooltip(buildLabelHtml(thisText, thisOpts), {
-                permanent: true, direction: 'center', className: 'polygon-label',
-              });
-              labelTooltipRefs.push({ sublayer: sublayers[pi], opts: thisOpts, labelText: thisText });
-            }
-          } else if (sublayers.length === 1) {
-            // MultiPolygon case: compute per-part centroids from Leaflet's parsed latlngs,
-            // then place an invisible centroid marker with a permanent tooltip for each part.
-            var partCentroids = getSublayerPartCentroids(sublayers[0]);
-            for (var pi = 0; pi < Math.min(partCentroids.length, labelArray.length); pi++) {
-              var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
-              if (!thisText) { continue; }
-              var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
-              var centroidMarker = L.marker(partCentroids[pi], {
-                icon: L.divIcon({ className: '', iconSize: [0, 0] }),
-                interactive: false,
-              });
-              centroidMarker.bindTooltip(buildLabelHtml(thisText, thisOpts), {
-                permanent: true, direction: 'center', className: 'polygon-label',
-              });
-              mainLayerGroups[groupName].addLayer(centroidMarker);
-              labelTooltipRefs.push({ sublayer: centroidMarker, opts: thisOpts, labelText: thisText });
+          // Parse labelStyle: JSON array → per-part styles; single object → same for all parts
+          var labelOptsDefault = {};
+          var labelOptsArray = null;
+          if (labelStyle) {
+            try {
+              var parsedStyle = typeof labelStyle === 'string' ? JSON.parse(labelStyle) : labelStyle;
+              if (Array.isArray(parsedStyle)) { labelOptsArray = parsedStyle; }
+              else { labelOptsDefault = parsedStyle; }
+            } catch (e) {
+              console.error("Invalid LabelStyle JSON for row", id, ":", e);
             }
           }
-        } else {
-          // Single label: apply to every polygon part so the label is always visually on the geometry.
-          // For a FeatureCollection (N sublayers), bind directly to each.
-          // For a MultiPolygon (1 sublayer whose bounding-box center may fall between parts),
-          // compute per-part centroids and place a centroid marker for each part.
-          var singleSublayers = [];
-          layer.eachLayer(function(sl) { singleSublayers.push(sl); });
 
-          if (singleSublayers.length > 1) {
-            // FeatureCollection: bind same label to each feature sublayer
-            for (var si = 0; si < singleSublayers.length; si++) {
-              singleSublayers[si].bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
-                permanent: true, direction: 'center', className: 'polygon-label',
-              });
-              labelTooltipRefs.push({ sublayer: singleSublayers[si], opts: labelOptsDefault, labelText: labelSingle });
-            }
-          } else if (singleSublayers.length === 1) {
-            var singlePartCentroids = getSublayerPartCentroids(singleSublayers[0]);
-            if (singlePartCentroids.length <= 1) {
-              // Simple Polygon: bind directly (direction:'center' uses getCenter() correctly)
-              singleSublayers[0].bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
-                permanent: true, direction: 'center', className: 'polygon-label',
-              });
-              labelTooltipRefs.push({ sublayer: singleSublayers[0], opts: labelOptsDefault, labelText: labelSingle });
-            } else {
-              // MultiPolygon: place same label at each part's centroid
-              for (var ci = 0; ci < singlePartCentroids.length; ci++) {
-                var partMarker = L.marker(singlePartCentroids[ci], {
+          if (labelArray) {
+            // Collect sublayers: L.geoJSON yields N sublayers for a FeatureCollection,
+            // but only 1 for a MultiPolygon (Leaflet merges all parts into one L.Polygon).
+            var sublayers = [];
+            layer.eachLayer(function(sl) { sublayers.push(sl); });
+
+            if (sublayers.length > 1) {
+              // FeatureCollection case: bind tooltip directly to each feature sublayer by index.
+              for (var pi = 0; pi < Math.min(sublayers.length, labelArray.length); pi++) {
+                var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
+                if (!thisText) { continue; }
+                var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
+                sublayers[pi].bindTooltip(buildLabelHtml(thisText, thisOpts), {
+                  permanent: true, direction: 'center', className: 'polygon-label',
+                });
+                labelTooltipRefs.push({ sublayer: sublayers[pi], opts: thisOpts, labelText: thisText });
+              }
+            } else if (sublayers.length === 1) {
+              // MultiPolygon case: compute per-part centroids from Leaflet's parsed latlngs,
+              // then place an invisible centroid marker with a permanent tooltip for each part.
+              var partCentroids = getSublayerPartCentroids(sublayers[0]);
+              for (var pi = 0; pi < Math.min(partCentroids.length, labelArray.length); pi++) {
+                var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
+                if (!thisText) { continue; }
+                var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
+                var centroidMarker = L.marker(partCentroids[pi], {
                   icon: L.divIcon({ className: '', iconSize: [0, 0] }),
                   interactive: false,
                 });
-                partMarker.bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
+                centroidMarker.bindTooltip(buildLabelHtml(thisText, thisOpts), {
                   permanent: true, direction: 'center', className: 'polygon-label',
                 });
-                mainLayerGroups[groupName].addLayer(partMarker);
-                labelTooltipRefs.push({ sublayer: partMarker, opts: labelOptsDefault, labelText: labelSingle });
+                mainLayerGroups[groupName].addLayer(centroidMarker);
+                labelTooltipRefs.push({ sublayer: centroidMarker, opts: thisOpts, labelText: thisText });
+              }
+            }
+          } else {
+            // Single label: apply to every polygon part so the label is always visually on the geometry.
+            // For a FeatureCollection (N sublayers), bind directly to each.
+            // For a MultiPolygon (1 sublayer whose bounding-box center may fall between parts),
+            // compute per-part centroids and place a centroid marker for each part.
+            var singleSublayers = [];
+            layer.eachLayer(function(sl) { singleSublayers.push(sl); });
+
+            if (singleSublayers.length > 1) {
+              // FeatureCollection: bind same label to each feature sublayer
+              for (var si = 0; si < singleSublayers.length; si++) {
+                singleSublayers[si].bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
+                  permanent: true, direction: 'center', className: 'polygon-label',
+                });
+                labelTooltipRefs.push({ sublayer: singleSublayers[si], opts: labelOptsDefault, labelText: labelSingle });
+              }
+            } else if (singleSublayers.length === 1) {
+              var singlePartCentroids = getSublayerPartCentroids(singleSublayers[0]);
+              if (singlePartCentroids.length <= 1) {
+                // Simple Polygon: bind directly (direction:'center' uses getCenter() correctly)
+                singleSublayers[0].bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
+                  permanent: true, direction: 'center', className: 'polygon-label',
+                });
+                labelTooltipRefs.push({ sublayer: singleSublayers[0], opts: labelOptsDefault, labelText: labelSingle });
+              } else {
+                // MultiPolygon: place same label at each part's centroid
+                for (var ci = 0; ci < singlePartCentroids.length; ci++) {
+                  var partMarker = L.marker(singlePartCentroids[ci], {
+                    icon: L.divIcon({ className: '', iconSize: [0, 0] }),
+                    interactive: false,
+                  });
+                  partMarker.bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
+                    permanent: true, direction: 'center', className: 'polygon-label',
+                  });
+                  mainLayerGroups[groupName].addLayer(partMarker);
+                  labelTooltipRefs.push({ sublayer: partMarker, opts: labelOptsDefault, labelText: labelSingle });
+                }
               }
             }
           }
+        } catch (e) {
+          console.error("Error adding label for row", id, ":", e);
         }
       }
     }
@@ -1241,9 +1247,11 @@ grist.onRecords((data, mappings) => {
   const effectiveMappings = mappings || lastKnownMappings;
   rawRecordsById = {};
   for (const rec of data) { rawRecordsById[rec.id] = rec; }
-  // grist.mapColumnNames uses its internal _mappings which may be null when
-  // Grist sends null mappings; fall back to manual mapping using effectiveMappings.
-  lastRecords = grist.mapColumnNames(data) || manualMapData(data, effectiveMappings) || data;
+  // When effectiveMappings is available, use manualMapData directly — it applies the mapping
+  // explicitly and doesn't depend on grist.mapColumnNames's internal _mappings state, which
+  // Grist may clear to null on data-only updates (causing mapColumnNames to return null or
+  // raw data with undefined values for virtual column names).
+  lastRecords = manualMapData(data, effectiveMappings) || grist.mapColumnNames(data) || data;
   if (mode !== 'single') {
     // If mappings are not done, we will assume that table has correct columns.
     // This is done to support existing widgets which where configured by
