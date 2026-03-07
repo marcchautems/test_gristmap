@@ -668,17 +668,19 @@ function updateMap(data, mappings) {
     }
   }
   const map = L.map('map', {
-    layers: [tiles],
     wheelPxPerZoomLevel: 90, //px, default 60, slows scrollwheel zoom
   });
+  // NOTE: tiles are NOT added here. The zoomend handler adds them after setView so we never
+  // go through an "add tiles → setView fires zoomend → immediately remove tiles" cycle,
+  // which was corrupting Leaflet's vector layer rendering state at zoom > 19.
 
   // Track map view changes to preserve position across data updates
   map.on('moveend', function () {
     savedMapView = { center: map.getCenter(), zoom: map.getZoom() };
   });
 
-  // Hide basemap tiles above their native max zoom so the background stays clean white.
-  // Without this, Leaflet keeps scaled-up lower-zoom tiles partially visible.
+  // Show basemap tiles only when zoom ≤ 19. Tiles are added/removed here rather than
+  // at map creation so that the add always happens after the view is established.
   map.on('zoomend', function () {
     if (map.getZoom() > 19) {
       if (map.hasLayer(tiles)) { map.removeLayer(tiles); }
