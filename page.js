@@ -693,26 +693,35 @@ function updateMap(data, mappings) {
       var tooltip = ref.sublayer.getTooltip();
       if (!tooltip) continue;
       var el = tooltip.getElement();
-      if (!el) continue;
       var opts = ref.opts;
-      // Min/max zoom visibility
-      if (opts.minZoom != null && currentZoom < opts.minZoom) {
-        el.style.display = 'none';
-        continue;
+      // Min/max zoom visibility — only applies when element is in DOM
+      if (el) {
+        if (opts.minZoom != null && currentZoom < opts.minZoom) {
+          el.style.display = 'none';
+          continue;
+        }
+        if (opts.maxZoom != null && currentZoom > opts.maxZoom) {
+          el.style.display = 'none';
+          continue;
+        }
+        el.style.display = '';
       }
-      if (opts.maxZoom != null && currentZoom > opts.maxZoom) {
-        el.style.display = 'none';
-        continue;
-      }
-      el.style.display = '';
-      // Dynamic font size scaling — rebuild tooltip HTML with new size and use setContent()
-      // (tooltip.update() resets innerHTML from stored content, so we must update stored content)
+      // Dynamic font size scaling — update content even when element not in DOM yet
+      // (so when a toggled-off layer is re-added, its label already has the correct size)
       if (opts.dynamicSize && opts.fontSize) {
         var refZoom = opts.referenceZoom || 18;
         var dynamicFontSize = opts.fontSize * Math.pow(2, currentZoom - refZoom);
         tooltip.setContent(buildLabelHtml(ref.labelText, opts, dynamicFontSize));
       }
     }
+  });
+
+  // Re-apply label size and visibility when a layer is toggled back on
+  var pendingZoomend = null;
+  map.on('layeradd', function () {
+    if (labelTooltipRefs.length === 0) return;
+    clearTimeout(pendingZoomend);
+    pendingZoomend = setTimeout(function () { map.fireEvent('zoomend'); }, 0);
   });
 
   // Make sure clusters always show up above points
