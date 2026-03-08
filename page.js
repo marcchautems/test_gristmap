@@ -1033,6 +1033,13 @@ function updateMap(data, mappings) {
         additionalLayerGroups[layerConfig.layerName] = group;
       }
 
+      // Bring main layer groups back to front so they always render above additional layers
+      for (const groupName in mainLayerGroups) {
+        if (map.hasLayer(mainLayerGroups[groupName])) {
+          mainLayerGroups[groupName].bringToFront();
+        }
+      }
+
       // Re-fit bounds with additional points (only on first load)
       if (isFirstLoad) {
         try {
