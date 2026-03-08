@@ -743,6 +743,9 @@ function updateMap(data, mappings) {
   labelTooltipRefs = [];
   const mainLayerGroups = {}; // { layerName: L.featureGroup } — from main table's Layer column
   const isLayerMode = isGeoJSONMode && mappings && Layer in mappings && mappings[Layer];
+  // Declared here (not inside the if-block) so the async fetchAdditionalLayers callback
+  // can also register layers and have them tracked by the layeradd/layerremove listener.
+  const layerToGroupName = new Map();
 
   if (isGeoJSONMode) {
     // GeoJSON mode — group features by Layer column value
@@ -916,7 +919,6 @@ function updateMap(data, mappings) {
     }
 
     // Build reverse-lookup used by the visibility tracker below
-    const layerToGroupName = new Map();
     for (const groupName in mainLayerGroups) {
       layerToGroupName.set(mainLayerGroups[groupName], groupName);
     }
