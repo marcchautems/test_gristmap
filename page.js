@@ -1342,6 +1342,13 @@ function onEditOptions() {
   layersTextarea.onchange = async (e) => {
     await grist.setOption('additionalLayers', e.target.value);
   };
+
+  const defaultVisTextarea = document.getElementById('defaultLayerVisibility');
+  defaultVisTextarea.value = Object.keys(savedLayerVisibility).length > 0
+    ? JSON.stringify(savedLayerVisibility, null, 2) : '';
+  defaultVisTextarea.onchange = async (e) => {
+    await grist.setOption('defaultLayerVisibility', e.target.value);
+  };
 }
 
 const optional = true;
@@ -1430,4 +1437,15 @@ grist.onOptions((options, interaction) => {
   }
   document.getElementById("additionalLayers").value =
     additionalLayersConfig.length > 0 ? JSON.stringify(additionalLayersConfig, null, 2) : '';
+  // Load default layer visibility — seeds savedLayerVisibility on every fresh page load
+  const defaultVisJson = options?.defaultLayerVisibility;
+  if (defaultVisJson) {
+    try {
+      savedLayerVisibility = JSON.parse(defaultVisJson);
+    } catch (e) {
+      console.error("Invalid defaultLayerVisibility JSON:", e);
+    }
+  }
+  document.getElementById("defaultLayerVisibility").value =
+    defaultVisJson || '';
 });
