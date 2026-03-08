@@ -1025,11 +1025,12 @@ function updateMap(data, mappings) {
           group.addLayer(featLayer);
           points.push(...extractPointsFromGeoJSON(feat.geojson));
         }
-        layerToGroupName.set(group, layerConfig.layerName);
         map.addLayer(group);
         if (savedLayerVisibility[layerConfig.layerName] === false) {
           map.removeLayer(group);
         }
+        // Register AFTER add/remove so the layeradd listener doesn't overwrite savedLayerVisibility
+        layerToGroupName.set(group, layerConfig.layerName);
         additionalLayerGroups[layerConfig.layerName] = group;
       }
 
