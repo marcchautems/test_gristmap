@@ -789,6 +789,26 @@ async function updateMap(data, mappings) {
   // Declared here (not inside the if-block) so the async fetchAdditionalLayers callback
   // can also register layers and have them tracked by the layeradd/layerremove listener.
   const layerToGroupName = new Map();
+  // All named layer groups (main + additional) — used by applyLayerOrder
+  const allLayerGroups = {};
+
+  // Apply draw order based on savedLayerVisibility key order.
+  // First key = topmost, last key = bottommost of listed layers.
+  // Layers not listed appear below all listed layers.
+  function applyLayerOrder() {
+    const orderedNames = Object.keys(savedLayerVisibility);
+    for (const name in allLayerGroups) {
+      if (!orderedNames.includes(name) && map.hasLayer(allLayerGroups[name])) {
+        allLayerGroups[name].bringToFront();
+      }
+    }
+    for (let i = orderedNames.length - 1; i >= 0; i--) {
+      const name = orderedNames[i];
+      if (allLayerGroups[name] && map.hasLayer(allLayerGroups[name])) {
+        allLayerGroups[name].bringToFront();
+      }
+    }
+  }
 
   if (isGeoJSONMode) {
     // GeoJSON mode — group features by Layer column value
@@ -968,6 +988,7 @@ async function updateMap(data, mappings) {
     // Build reverse-lookup used by the visibility tracker below
     for (const groupName in mainLayerGroups) {
       layerToGroupName.set(mainLayerGroups[groupName], groupName);
+      allLayerGroups[groupName] = mainLayerGroups[groupName];
     }
 
     // Add all layer groups to the map, then restore previously saved visibility
@@ -986,6 +1007,9 @@ async function updateMap(data, mappings) {
     map.on('layeradd layerremove', function (e) {
       if (layerToGroupName.has(e.layer)) {
         savedLayerVisibility[layerToGroupName.get(e.layer)] = (e.type === 'layeradd');
+        if (e.type === 'layeradd') {
+          applyLayerOrder();
+        }
       }
     });
 
@@ -1078,27 +1102,11 @@ async function updateMap(data, mappings) {
         }
         // Register AFTER add/remove so the layeradd listener doesn't overwrite savedLayerVisibility
         layerToGroupName.set(group, layerConfig.layerName);
+        allLayerGroups[layerConfig.layerName] = group;
         additionalLayerGroups[layerConfig.layerName] = group;
       }
 
-      // Apply draw order based on defaultLayerVisibility key order.
-      // First key listed = topmost layer, last key = bottommost of listed layers.
-      // Layers not listed appear below all listed layers.
-      const allLayerGroups = Object.assign({}, mainLayerGroups, additionalLayerGroups);
-      const orderedNames = Object.keys(savedLayerVisibility);
-      // Bring unlisted layers to front first (they'll end up below the listed ones)
-      for (const name in allLayerGroups) {
-        if (!orderedNames.includes(name) && map.hasLayer(allLayerGroups[name])) {
-          allLayerGroups[name].bringToFront();
-        }
-      }
-      // Bring listed layers in reverse order so first-listed ends up on top
-      for (let i = orderedNames.length - 1; i >= 0; i--) {
-        const name = orderedNames[i];
-        if (allLayerGroups[name] && map.hasLayer(allLayerGroups[name])) {
-          allLayerGroups[name].bringToFront();
-        }
-      }
+      applyLayerOrder();
 
       // Re-fit bounds with additional points (only on first load)
       if (isFirstLoad) {
