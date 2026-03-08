@@ -584,20 +584,38 @@ async function getAllColumnLabels() {
   }
 }
 
+// Return a copy of `overlays` with keys sorted by `orderedNames` (first = top of list).
+// Keys not in orderedNames appear at the end in their original order.
+function sortedOverlays(overlays, orderedNames) {
+  var result = {};
+  for (var i = 0; i < orderedNames.length; i++) {
+    var name = orderedNames[i];
+    if (name in overlays) { result[name] = overlays[name]; }
+  }
+  for (var key in overlays) {
+    if (!(key in result)) { result[key] = overlays[key]; }
+  }
+  return result;
+}
+
 // Helper: add the appropriate layer control (grouped or flat)
-function addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, layerGroupName) {
+function addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, layerGroupName, orderedNames) {
   var allOverlays = Object.assign({}, mainLayerGroups, additionalLayerGroups);
   var totalCount = Object.keys(allOverlays).length;
   if (totalCount <= 1) { return; }
 
+  var sorted = orderedNames ? sortedOverlays(allOverlays, orderedNames) : allOverlays;
+
   if (isLayerMode && Object.keys(mainLayerGroups).length > 1) {
     // Grouped control: main layers in a collapsible group, additional as standalone
+    var sortedMain = orderedNames ? sortedOverlays(mainLayerGroups, orderedNames) : mainLayerGroups;
+    var sortedAdditional = orderedNames ? sortedOverlays(additionalLayerGroups, orderedNames) : additionalLayerGroups;
     var groups = {};
-    groups[layerGroupName] = mainLayerGroups;
-    new L.Control.GroupedLayers(groups, additionalLayerGroups).addTo(map);
+    groups[layerGroupName] = sortedMain;
+    new L.Control.GroupedLayers(groups, sortedAdditional).addTo(map);
   } else {
     // Flat control (no Layer column or only one main group)
-    L.control.layers(null, allOverlays).addTo(map);
+    L.control.layers(null, sorted).addTo(map);
   }
 }
 
@@ -1124,10 +1142,10 @@ async function updateMap(data, mappings) {
       layerGroupName = await getColumnLabel(String(mappings[Layer]));
     }
 
-    addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, layerGroupName);
+    addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, layerGroupName, Object.keys(savedLayerVisibility));
   }).catch((err) => {
     console.error("Error loading additional layers:", err);
-    addLayerControl(map, mainLayerGroups, {}, isLayerMode, 'Layers');
+    addLayerControl(map, mainLayerGroups, {}, isLayerMode, 'Layers', Object.keys(savedLayerVisibility));
   });
 
   // Restore previous view if available, otherwise fit to data bounds
