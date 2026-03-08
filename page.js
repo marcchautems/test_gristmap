@@ -215,7 +215,7 @@ function getInfo(rec) {
   return result;
 }
 
-function buildPopupContent(name, rawRec, mappings) {
+function buildPopupContent(name, rawRec, mappings, colLabels) {
   // If no Popup columns mapped, fall back to just the name
   if (!mappings || !(Popup in mappings) || !mappings[Popup] || !rawRec) {
     return DOMPurify.sanitize(String(name || ''));
@@ -233,14 +233,15 @@ function buildPopupContent(name, rawRec, mappings) {
   for (const col of colNames) {
     const val = parseValue(rawRec[col]);
     if (val == null || val === '') { continue; }
-    html += '<br><em>' + DOMPurify.sanitize(String(col)) + ':</em> '
+    const label = (colLabels && colLabels[col]) ? colLabels[col] : col;
+    html += '<br><em>' + DOMPurify.sanitize(String(label)) + ':</em> '
           + DOMPurify.sanitize(String(val));
   }
   html += '</div>';
   return html;
 }
 
-function buildTooltipContent(name, rawRec, mappings) {
+function buildTooltipContent(name, rawRec, mappings, colLabels) {
   if (!mappings || !(Tooltip in mappings) || !mappings[Tooltip] || !rawRec) {
     return null; // no tooltip mapping → don't show tooltip
   }
@@ -254,7 +255,8 @@ function buildTooltipContent(name, rawRec, mappings) {
   for (const col of colNames) {
     const val = parseValue(rawRec[col]);
     if (val == null || val === '') { continue; }
-    html += '<br><em>' + DOMPurify.sanitize(String(col)) + ':</em> '
+    const label = (colLabels && colLabels[col]) ? colLabels[col] : col;
+    html += '<br><em>' + DOMPurify.sanitize(String(label)) + ':</em> '
           + DOMPurify.sanitize(String(val));
   }
   html += '</div>';
@@ -567,6 +569,21 @@ async function getColumnLabel(colId) {
   return colId;
 }
 
+// Fetch all column labels at once, returns {colId: label} map
+async function getAllColumnLabels() {
+  try {
+    var colData = await grist.docApi.fetchTable('_grist_Tables_column');
+    var map = {};
+    for (var i = 0; i < colData.id.length; i++) {
+      map[colData.colId[i]] = colData.label[i] || colData.colId[i];
+    }
+    return map;
+  } catch (e) {
+    console.warn('Could not fetch column labels:', e);
+    return {};
+  }
+}
+
 // Helper: add the appropriate layer control (grouped or flat)
 function addLayerControl(map, mainLayerGroups, additionalLayerGroups, isLayerMode, layerGroupName) {
   var allOverlays = Object.assign({}, mainLayerGroups, additionalLayerGroups);
@@ -638,13 +655,16 @@ let labelTooltipRefs = []; // [{sublayer, opts}] — for zoom-dependent label up
 let savedLayerVisibility = {}; // layerName → boolean; persists layer toggle state across data updates
 let savedMapView = null; // { center, zoom } — persisted across updateMap calls via moveend event
 
-function updateMap(data, mappings) {
+async function updateMap(data, mappings) {
   data = data || selectedRecords;
   selectedRecords = data;
   if (!data || data.length === 0) {
     showProblem("No data found yet");
     return;
   }
+
+  // Pre-fetch column labels so popup/tooltip can show display names instead of column IDs
+  const colLabels = await getAllColumnLabels();
 
   // Determine if we're in GeoJSON mode
   const isGeoJSONMode = mappings && GeoJSON in mappings && mappings[GeoJSON];
@@ -816,9 +836,9 @@ function updateMap(data, mappings) {
           });
         },
         onEachFeature: function (feature, layer) {
-          const popupHtml = buildPopupContent(name, rawRecordsById[id], mappings);
+          const popupHtml = buildPopupContent(name, rawRecordsById[id], mappings, colLabels);
           layer.bindPopup(popupHtml);
-          const tooltipHtml = buildTooltipContent(name, rawRecordsById[id], mappings);
+          const tooltipHtml = buildTooltipContent(name, rawRecordsById[id], mappings, colLabels);
           if (tooltipHtml) {
             layer.bindTooltip(tooltipHtml, { sticky: true, opacity: 0.9 });
           }
@@ -1018,7 +1038,7 @@ function updateMap(data, mappings) {
         pane: id == selectedRowId ? "selectedMarker" : "otherMarkers",
       });
 
-      const popupHtml = buildPopupContent(name, rawRecordsById[id], mappings);
+      const popupHtml = buildPopupContent(name, rawRecordsById[id], mappings, colLabels);
       marker.bindPopup(popupHtml);
       markers.addLayer(marker);
 
