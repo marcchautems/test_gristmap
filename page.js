@@ -31,6 +31,8 @@ const Style = 'Style';
 const Layer = 'Layer';
 // Optional - multiple columns to display in the popup
 const Popup = 'Popup';
+// Optional - multiple columns to display in the hover tooltip
+const Tooltip = 'Tooltip';
 // Optional - permanent text label displayed on the feature
 const Label = 'Label';
 // Optional - JSON style for the label (bearing, fontSize, color, fontWeight, dynamicSize, minZoom, maxZoom, opacity)
@@ -225,6 +227,27 @@ function buildPopupContent(name, rawRec, mappings) {
     return DOMPurify.sanitize(String(name || ''));
   }
   let html = '<div style="max-width:300px">';
+  if (name) {
+    html += '<strong>' + DOMPurify.sanitize(String(name)) + '</strong>';
+  }
+  for (const col of colNames) {
+    const val = parseValue(rawRec[col]);
+    if (val == null || val === '') { continue; }
+    html += '<br><em>' + DOMPurify.sanitize(String(col)) + ':</em> '
+          + DOMPurify.sanitize(String(val));
+  }
+  html += '</div>';
+  return html;
+}
+
+function buildTooltipContent(name, rawRec, mappings) {
+  if (!mappings || !(Tooltip in mappings) || !mappings[Tooltip] || !rawRec) {
+    return null; // no tooltip mapping → don't show tooltip
+  }
+  const tooltipMappings = mappings[Tooltip];
+  const colNames = Array.isArray(tooltipMappings) ? tooltipMappings : [tooltipMappings];
+  if (colNames.length === 0) { return null; }
+  let html = '<div style="max-width:260px">';
   if (name) {
     html += '<strong>' + DOMPurify.sanitize(String(name)) + '</strong>';
   }
@@ -795,6 +818,10 @@ function updateMap(data, mappings) {
         onEachFeature: function (feature, layer) {
           const popupHtml = buildPopupContent(name, rawRecordsById[id], mappings);
           layer.bindPopup(popupHtml);
+          const tooltipHtml = buildTooltipContent(name, rawRecordsById[id], mappings);
+          if (tooltipHtml) {
+            layer.bindTooltip(tooltipHtml, { sticky: true, opacity: 0.9 });
+          }
           layer.on("click", () => {
             selectGeoJSONFeature(id);
           });
@@ -1403,6 +1430,14 @@ grist.ready({
       optional,
       allowMultiple: true,
       description: "Columns to display in the popup when clicking a feature.",
+    },
+    {
+      name: "Tooltip",
+      type: "Any",
+      title: "Tooltip",
+      optional,
+      allowMultiple: true,
+      description: "Columns to display in the hover tooltip (GeoJSON mode only).",
     },
     {
       name: "Label",
