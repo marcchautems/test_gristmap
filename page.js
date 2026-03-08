@@ -1061,10 +1061,22 @@ function updateMap(data, mappings) {
         additionalLayerGroups[layerConfig.layerName] = group;
       }
 
-      // Bring main layer groups back to front so they always render above additional layers
-      for (const groupName in mainLayerGroups) {
-        if (map.hasLayer(mainLayerGroups[groupName])) {
-          mainLayerGroups[groupName].bringToFront();
+      // Apply draw order based on defaultLayerVisibility key order.
+      // First key listed = topmost layer, last key = bottommost of listed layers.
+      // Layers not listed appear below all listed layers.
+      const allLayerGroups = Object.assign({}, mainLayerGroups, additionalLayerGroups);
+      const orderedNames = Object.keys(savedLayerVisibility);
+      // Bring unlisted layers to front first (they'll end up below the listed ones)
+      for (const name in allLayerGroups) {
+        if (!orderedNames.includes(name) && map.hasLayer(allLayerGroups[name])) {
+          allLayerGroups[name].bringToFront();
+        }
+      }
+      // Bring listed layers in reverse order so first-listed ends up on top
+      for (let i = orderedNames.length - 1; i >= 0; i--) {
+        const name = orderedNames[i];
+        if (allLayerGroups[name] && map.hasLayer(allLayerGroups[name])) {
+          allLayerGroups[name].bringToFront();
         }
       }
 
