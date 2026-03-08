@@ -612,6 +612,7 @@ let markers = [];
 let geoJSONLayers = {};
 let geoJSONStyles = {};
 let labelTooltipRefs = []; // [{sublayer, opts}] — for zoom-dependent label updates
+let savedLayerVisibility = {}; // layerName → boolean; persists layer toggle state across data updates
 let savedMapView = null; // { center, zoom } — persisted across updateMap calls via moveend event
 
 function updateMap(data, mappings) {
@@ -914,10 +915,30 @@ function updateMap(data, mappings) {
       }
     }
 
-    // Add all layer groups to the map
+    // Build reverse-lookup used by the visibility tracker below
+    const layerToGroupName = new Map();
+    for (const groupName in mainLayerGroups) {
+      layerToGroupName.set(mainLayerGroups[groupName], groupName);
+    }
+
+    // Add all layer groups to the map, then restore previously saved visibility
     for (const groupName in mainLayerGroups) {
       map.addLayer(mainLayerGroups[groupName]);
     }
+    for (const groupName in mainLayerGroups) {
+      if (savedLayerVisibility[groupName] === false) {
+        map.removeLayer(mainLayerGroups[groupName]);
+      }
+    }
+
+    // Track future user toggles (via layer control checkboxes) so we can restore them
+    // on the next data update. Uses layeradd/layerremove which fire for both
+    // L.control.layers and L.Control.GroupedLayers.
+    map.on('layeradd layerremove', function (e) {
+      if (layerToGroupName.has(e.layer)) {
+        savedLayerVisibility[layerToGroupName.get(e.layer)] = (e.type === 'layeradd');
+      }
+    });
 
     clearGeoJSONLayers = () => {
       for (const groupName in mainLayerGroups) {
@@ -1002,7 +1023,11 @@ function updateMap(data, mappings) {
           group.addLayer(featLayer);
           points.push(...extractPointsFromGeoJSON(feat.geojson));
         }
+        layerToGroupName.set(group, layerConfig.layerName);
         map.addLayer(group);
+        if (savedLayerVisibility[layerConfig.layerName] === false) {
+          map.removeLayer(group);
+        }
         additionalLayerGroups[layerConfig.layerName] = group;
       }
 
