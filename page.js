@@ -902,7 +902,13 @@ async function updateMap(data, mappings) {
           layer.bindPopup(popupHtml);
           const tooltipHtml = buildTooltipContent(name, rawRecordsById[id], mappings, colLabels);
           if (tooltipHtml) {
-            layer.bindTooltip(tooltipHtml, { sticky: true, opacity: 0.9 });
+            // Use a free-floating tooltip instead of bindTooltip to avoid
+            // conflicting with permanent label tooltips bound to the same layer.
+            const hoverTip = L.tooltip({ opacity: 0.9, className: 'hover-tooltip' });
+            hoverTip.setContent(tooltipHtml);
+            layer.on('mouseover', function (e) { hoverTip.setLatLng(e.latlng).addTo(map); });
+            layer.on('mousemove', function (e) { hoverTip.setLatLng(e.latlng); });
+            layer.on('mouseout',  function ()  { hoverTip.remove(); });
           }
           layer.on("click", () => {
             selectGeoJSONFeature(id);
