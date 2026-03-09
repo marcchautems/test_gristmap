@@ -316,6 +316,26 @@ function extractPointsFromGeoJSON(geojson) {
   return points;
 }
 
+// Parse a value that may be a plain JS object, a standard JSON string,
+// or a Python repr() string (single-quoted keys/values, True/False/None).
+function parseGristJson(raw) {
+  if (raw === null || raw === undefined) { return null; }
+  if (typeof raw === 'object') { return raw; } // already decoded
+  if (typeof raw !== 'string') { return null; }
+  // Try standard JSON first
+  try { return JSON.parse(raw); } catch (_) {}
+  // Try converting Python repr to JSON: single→double quotes, True/False/None
+  try {
+    const jsonLike = raw
+      .replace(/'/g, '"')
+      .replace(/\bTrue\b/g, 'true')
+      .replace(/\bFalse\b/g, 'false')
+      .replace(/\bNone\b/g, 'null');
+    return JSON.parse(jsonLike);
+  } catch (_) {}
+  return null;
+}
+
 // Fetch additional layers from other Grist tables based on config
 async function fetchAdditionalLayers() {
   const results = [];
@@ -340,16 +360,18 @@ async function fetchAdditionalLayers() {
         if (!geojsonRaw) { continue; }
         let parsedGeoJSON;
         try {
-          parsedGeoJSON = typeof geojsonRaw === 'string' ? JSON.parse(geojsonRaw) : geojsonRaw;
+          parsedGeoJSON = parseGristJson(geojsonRaw);
         } catch (e) {
+          console.warn("Could not parse GeoJSON for row", i, ":", geojsonRaw);
           continue;
         }
+        if (!parsedGeoJSON) { continue; }
         let style = {};
         if (styleCol && tableData[styleCol]) {
           const styleRaw = tableData[styleCol][i];
           if (styleRaw) {
             try {
-              style = typeof styleRaw === 'string' ? JSON.parse(styleRaw) : styleRaw;
+              style = parseGristJson(styleRaw) || {};
             } catch (e) { /* ignore */ }
           }
         }
@@ -672,8 +694,10 @@ let geoJSONStyles = {};
 let labelTooltipRefs = []; // [{sublayer, opts}] — for zoom-dependent label updates
 let savedLayerVisibility = {}; // layerName → boolean; persists layer toggle state across data updates
 let savedMapView = null; // { center, zoom } — persisted across updateMap calls via moveend event
+let updateMapSeq = 0; // incremented on each updateMap call; async callbacks check this to self-cancel if stale
 
 async function updateMap(data, mappings) {
+  const mySeq = ++updateMapSeq;
   data = data || selectedRecords;
   selectedRecords = data;
   if (!data || data.length === 0) {
@@ -1093,6 +1117,7 @@ async function updateMap(data, mappings) {
 
   // Fetch and add additional layers from other tables
   fetchAdditionalLayers().then(async (additionalLayers) => {
+    if (mySeq !== updateMapSeq) { return; } // a newer updateMap call has already taken over
     const additionalLayerGroups = {};
 
     if (additionalLayers.length > 0) {
@@ -1551,4 +1576,9 @@ grist.onOptions((options, interaction) => {
   }
   document.getElementById("defaultLayerVisibility").value =
     defaultVisJson || '';
+
+  // Redraw the map so changes to additionalLayers, defaultLayerVisibility, etc. take effect.
+  if (lastRecords) {
+    updateMap(lastRecords, lastKnownMappings);
+  }
 });
