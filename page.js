@@ -864,12 +864,12 @@ async function updateMap(data, mappings) {
 
       let parsedGeoJSON;
       try {
-        parsedGeoJSON =
-          typeof geojson === "string" ? JSON.parse(geojson) : geojson;
+        parsedGeoJSON = parseGristJson(geojson);
       } catch (e) {
         console.error("Invalid GeoJSON for row", id, ":", e);
         continue;
       }
+      if (!parsedGeoJSON) { continue; }
 
       // Extract points for bounds
       points.push(...extractPointsFromGeoJSON(parsedGeoJSON));
