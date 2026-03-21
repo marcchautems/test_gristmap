@@ -679,9 +679,11 @@ function buildLabelHtml(text, opts, fontSizeOverride) {
   if (opts.color) styles.push('color:' + opts.color);
   if (opts.fontWeight) styles.push('font-weight:' + opts.fontWeight);
   if (opts.opacity != null) styles.push('opacity:' + opts.opacity);
+  // Convert newlines to <br> so multi-line labels render correctly in HTML tooltips.
+  var htmlText = String(text).replace(/\n/g, '<br>');
   return styles.length > 1
-    ? '<span style="' + styles.join(';') + '">' + text + '</span>'
-    : text;
+    ? '<span style="' + styles.join(';') + '">' + htmlText + '</span>'
+    : htmlText;
 }
 
 // Function to clear last added markers. Used to clear the map when new record is selected.
