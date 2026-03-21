@@ -678,6 +678,7 @@ function buildLabelHtml(text, opts, fontSizeOverride) {
   if (fs) styles.push('font-size:' + fs + 'px');
   if (opts.color) styles.push('color:' + opts.color);
   if (opts.fontWeight) styles.push('font-weight:' + opts.fontWeight);
+  if (opts.lineHeight != null) styles.push('line-height:' + opts.lineHeight);
   if (opts.opacity != null) styles.push('opacity:' + opts.opacity);
   // Convert newlines to <br> so multi-line labels render correctly in HTML tooltips.
   var htmlText = String(text).replace(/\n/g, '<br>');
@@ -1542,7 +1543,7 @@ grist.ready({
       type: "Text",
       title: "Label Style",
       optional,
-      description: 'JSON style for labels. Supported properties: bearing (rotation degrees), fontSize (px), color, fontWeight, opacity, dynamicSize (bool), referenceZoom (for dynamic sizing), minZoom, maxZoom.',
+      description: 'JSON style for labels. Supported properties: bearing (rotation degrees), fontSize (px), lineHeight (e.g. 1.4), color, fontWeight, opacity, dynamicSize (bool), referenceZoom (for dynamic sizing), minZoom, maxZoom.',
     },
   ],
   allowSelectBy: true,
