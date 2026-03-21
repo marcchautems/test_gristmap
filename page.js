@@ -672,7 +672,7 @@ function getSublayerPartCentroids(sublayer) {
 // Build the HTML content for a permanent label tooltip.
 // fontSizeOverride replaces opts.fontSize (used in zoomend for dynamic sizing).
 function buildLabelHtml(text, opts, fontSizeOverride) {
-  var styles = ['display:inline-block'];
+  var styles = ['display:inline-block', 'text-align:center'];
   if (opts.bearing != null) styles.push('transform:rotate(' + Number(opts.bearing) + 'deg)');
   var fs = (fontSizeOverride != null) ? fontSizeOverride : opts.fontSize;
   if (fs) styles.push('font-size:' + fs + 'px');
