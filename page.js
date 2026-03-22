@@ -263,6 +263,92 @@ function buildTooltipContent(name, rawRec, mappings, colLabels) {
   return html;
 }
 
+// Add a permanent label tooltip to a Leaflet GeoJSON layer.
+// layer:       L.geoJSON layer
+// label:       string (plain text or JSON array for per-part labels)
+// labelStyle:  string|object (LabelStyle JSON or plain object; may be null)
+// targetGroup: L.featureGroup — centroid markers for MultiPolygon parts are added here
+// Reads/writes the module-level labelTooltipRefs array.
+function addLabelToLayer(layer, label, labelStyle, targetGroup) {
+  if (!label) { return; }
+  try {
+    var labelArray = null;
+    var labelSingle = DOMPurify.sanitize(String(label));
+    try {
+      var parsedLabel = JSON.parse(label);
+      if (Array.isArray(parsedLabel)) { labelArray = parsedLabel; }
+    } catch (e) { /* plain string */ }
+
+    var labelOptsDefault = {};
+    var labelOptsArray = null;
+    if (labelStyle) {
+      try {
+        var parsedStyle = typeof labelStyle === 'string' ? JSON.parse(labelStyle) : labelStyle;
+        if (Array.isArray(parsedStyle)) { labelOptsArray = parsedStyle; }
+        else { labelOptsDefault = parsedStyle; }
+      } catch (e) { /* ignore bad style */ }
+    }
+
+    var sublayers = [];
+    layer.eachLayer(function(sl) { sublayers.push(sl); });
+
+    if (labelArray) {
+      if (sublayers.length > 1) {
+        // FeatureCollection: bind per-feature label by index
+        for (var pi = 0; pi < Math.min(sublayers.length, labelArray.length); pi++) {
+          var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
+          if (!thisText) { continue; }
+          var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
+          sublayers[pi].bindTooltip(buildLabelHtml(thisText, thisOpts), {
+            permanent: true, direction: 'center', className: 'polygon-label',
+          });
+          labelTooltipRefs.push({ sublayer: sublayers[pi], opts: thisOpts, labelText: thisText });
+        }
+      } else if (sublayers.length === 1) {
+        // MultiPolygon: centroid marker per part
+        var partCentroids = getSublayerPartCentroids(sublayers[0]);
+        for (var pi = 0; pi < Math.min(partCentroids.length, labelArray.length); pi++) {
+          var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
+          if (!thisText) { continue; }
+          var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
+          var m = L.marker(partCentroids[pi], { icon: L.divIcon({ className: '', iconSize: [0, 0] }), interactive: false });
+          m.bindTooltip(buildLabelHtml(thisText, thisOpts), { permanent: true, direction: 'center', className: 'polygon-label' });
+          targetGroup.addLayer(m);
+          labelTooltipRefs.push({ sublayer: m, opts: thisOpts, labelText: thisText });
+        }
+      }
+    } else {
+      if (sublayers.length > 1) {
+        // FeatureCollection: same label on every feature
+        for (var si = 0; si < sublayers.length; si++) {
+          sublayers[si].bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
+            permanent: true, direction: 'center', className: 'polygon-label',
+          });
+          labelTooltipRefs.push({ sublayer: sublayers[si], opts: labelOptsDefault, labelText: labelSingle });
+        }
+      } else if (sublayers.length === 1) {
+        var singlePartCentroids = getSublayerPartCentroids(sublayers[0]);
+        if (singlePartCentroids.length <= 1) {
+          sublayers[0].bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
+            permanent: true, direction: 'center', className: 'polygon-label',
+          });
+          labelTooltipRefs.push({ sublayer: sublayers[0], opts: labelOptsDefault, labelText: labelSingle });
+        } else {
+          // MultiPolygon: centroid marker per part
+          for (var ci = 0; ci < singlePartCentroids.length; ci++) {
+            var m = L.marker(singlePartCentroids[ci], { icon: L.divIcon({ className: '', iconSize: [0, 0] }), interactive: false });
+            m.bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), { permanent: true, direction: 'center', className: 'polygon-label' });
+            targetGroup.addLayer(m);
+            labelTooltipRefs.push({ sublayer: m, opts: labelOptsDefault, labelText: labelSingle });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Error adding label:", e);
+  }
+}
+
 // Recursively extract all coordinate points from a GeoJSON geometry
 function extractPointsFromGeoJSON(geojson) {
   const points = [];
@@ -354,6 +440,8 @@ async function fetchAdditionalLayers() {
       const geojsonCol = config.columns.GeoJSON;
       const nameCol = config.columns.Name;
       const styleCol = config.columns.Style;
+      const labelCol = config.columns.Label || null;
+      const labelStyleCol = config.columns.LabelStyle || null;
       const filterCol = config.filter || null;
       const features = [];
       for (let i = 0; i < tableData.id.length; i++) {
@@ -381,7 +469,9 @@ async function fetchAdditionalLayers() {
           }
         }
         const name = (nameCol && tableData[nameCol]) ? tableData[nameCol][i] : null;
-        features.push({ geojson: parsedGeoJSON, name: name, style: style });
+        const label = (labelCol && tableData[labelCol]) ? tableData[labelCol][i] : null;
+        const labelStyle = (labelStyleCol && tableData[labelStyleCol]) ? tableData[labelStyleCol][i] : null;
+        features.push({ geojson: parsedGeoJSON, name, style, label, labelStyle });
       }
       results.push({
         layerName: config.layer || config.table,
@@ -937,107 +1027,7 @@ async function updateMap(data, mappings) {
 
       // Add permanent label tooltip if Label column is mapped.
       if (label) {
-        try {
-          // Parse label: JSON array → per-part centroid markers; plain string → bind to whole layer
-          var labelArray = null;
-          var labelSingle = DOMPurify.sanitize(String(label));
-          try {
-            var parsedLabel = JSON.parse(label);
-            if (Array.isArray(parsedLabel)) { labelArray = parsedLabel; }
-          } catch (e) { /* plain string, not a JSON array */ }
-
-          // Parse labelStyle: JSON array → per-part styles; single object → same for all parts
-          var labelOptsDefault = {};
-          var labelOptsArray = null;
-          if (labelStyle) {
-            try {
-              var parsedStyle = typeof labelStyle === 'string' ? JSON.parse(labelStyle) : labelStyle;
-              if (Array.isArray(parsedStyle)) { labelOptsArray = parsedStyle; }
-              else { labelOptsDefault = parsedStyle; }
-            } catch (e) {
-              console.error("Invalid LabelStyle JSON for row", id, ":", e);
-            }
-          }
-
-          if (labelArray) {
-            // Collect sublayers: L.geoJSON yields N sublayers for a FeatureCollection,
-            // but only 1 for a MultiPolygon (Leaflet merges all parts into one L.Polygon).
-            var sublayers = [];
-            layer.eachLayer(function(sl) { sublayers.push(sl); });
-
-            if (sublayers.length > 1) {
-              // FeatureCollection case: bind tooltip directly to each feature sublayer by index.
-              for (var pi = 0; pi < Math.min(sublayers.length, labelArray.length); pi++) {
-                var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
-                if (!thisText) { continue; }
-                var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
-                sublayers[pi].bindTooltip(buildLabelHtml(thisText, thisOpts), {
-                  permanent: true, direction: 'center', className: 'polygon-label',
-                });
-                labelTooltipRefs.push({ sublayer: sublayers[pi], opts: thisOpts, labelText: thisText });
-              }
-            } else if (sublayers.length === 1) {
-              // MultiPolygon case: compute per-part centroids from Leaflet's parsed latlngs,
-              // then place an invisible centroid marker with a permanent tooltip for each part.
-              var partCentroids = getSublayerPartCentroids(sublayers[0]);
-              for (var pi = 0; pi < Math.min(partCentroids.length, labelArray.length); pi++) {
-                var thisText = DOMPurify.sanitize(String(labelArray[pi] || ''));
-                if (!thisText) { continue; }
-                var thisOpts = labelOptsArray ? (labelOptsArray[pi] || {}) : labelOptsDefault;
-                var centroidMarker = L.marker(partCentroids[pi], {
-                  icon: L.divIcon({ className: '', iconSize: [0, 0] }),
-                  interactive: false,
-                });
-                centroidMarker.bindTooltip(buildLabelHtml(thisText, thisOpts), {
-                  permanent: true, direction: 'center', className: 'polygon-label',
-                });
-                mainLayerGroups[groupName].addLayer(centroidMarker);
-                labelTooltipRefs.push({ sublayer: centroidMarker, opts: thisOpts, labelText: thisText });
-              }
-            }
-          } else {
-            // Single label: apply to every polygon part so the label is always visually on the geometry.
-            // For a FeatureCollection (N sublayers), bind directly to each.
-            // For a MultiPolygon (1 sublayer whose bounding-box center may fall between parts),
-            // compute per-part centroids and place a centroid marker for each part.
-            var singleSublayers = [];
-            layer.eachLayer(function(sl) { singleSublayers.push(sl); });
-
-            if (singleSublayers.length > 1) {
-              // FeatureCollection: bind same label to each feature sublayer
-              for (var si = 0; si < singleSublayers.length; si++) {
-                singleSublayers[si].bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
-                  permanent: true, direction: 'center', className: 'polygon-label',
-                });
-                labelTooltipRefs.push({ sublayer: singleSublayers[si], opts: labelOptsDefault, labelText: labelSingle });
-              }
-            } else if (singleSublayers.length === 1) {
-              var singlePartCentroids = getSublayerPartCentroids(singleSublayers[0]);
-              if (singlePartCentroids.length <= 1) {
-                // Simple Polygon: bind directly (direction:'center' uses getCenter() correctly)
-                singleSublayers[0].bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
-                  permanent: true, direction: 'center', className: 'polygon-label',
-                });
-                labelTooltipRefs.push({ sublayer: singleSublayers[0], opts: labelOptsDefault, labelText: labelSingle });
-              } else {
-                // MultiPolygon: place same label at each part's centroid
-                for (var ci = 0; ci < singlePartCentroids.length; ci++) {
-                  var partMarker = L.marker(singlePartCentroids[ci], {
-                    icon: L.divIcon({ className: '', iconSize: [0, 0] }),
-                    interactive: false,
-                  });
-                  partMarker.bindTooltip(buildLabelHtml(labelSingle, labelOptsDefault), {
-                    permanent: true, direction: 'center', className: 'polygon-label',
-                  });
-                  mainLayerGroups[groupName].addLayer(partMarker);
-                  labelTooltipRefs.push({ sublayer: partMarker, opts: labelOptsDefault, labelText: labelSingle });
-                }
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Error adding label for row", id, ":", e);
-        }
+        addLabelToLayer(layer, label, labelStyle, mainLayerGroups[groupName]);
       }
     }
 
@@ -1151,6 +1141,9 @@ async function updateMap(data, mappings) {
             },
           });
           group.addLayer(featLayer);
+          if (feat.label) {
+            addLabelToLayer(featLayer, feat.label, feat.labelStyle, group);
+          }
           points.push(...extractPointsFromGeoJSON(feat.geojson));
         }
         map.addLayer(group);
