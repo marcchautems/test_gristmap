@@ -354,8 +354,13 @@ async function fetchAdditionalLayers() {
       const geojsonCol = config.columns.GeoJSON;
       const nameCol = config.columns.Name;
       const styleCol = config.columns.Style;
+      const filterCol = config.filter || null;
       const features = [];
       for (let i = 0; i < tableData.id.length; i++) {
+        // Skip row if filter column is specified and its value is falsy
+        if (filterCol && tableData[filterCol]) {
+          if (!tableData[filterCol][i]) { continue; }
+        }
         const geojsonRaw = tableData[geojsonCol] ? tableData[geojsonCol][i] : null;
         if (!geojsonRaw) { continue; }
         let parsedGeoJSON;
