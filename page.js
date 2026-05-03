@@ -790,9 +790,91 @@ function buildLabelHtml(text, opts, fontSizeOverride) {
     : htmlText;
 }
 
-// Show a modal form for the given column IDs and return a Promise that resolves to
+// Simple JSON.parse with null fallback (used for column widgetOptions).
+function safeParse(v) {
+  try { return JSON.parse(v); } catch (_) { return null; }
+}
+
+// Resolve the visible-column ID for a Ref field in the referenced table.
+// Ported from the calendar widget. Tries three approaches in order.
+function resolveRefDisplayColId(rec, allColumns, refTable) {
+  const widgetOptions = safeParse(rec.widgetOptions);
+  const visRef = widgetOptions?.visibleCol;
+  if (typeof visRef === 'number' && visRef > 0) {
+    const idx = allColumns.id.indexOf(visRef);
+    if (idx !== -1) {
+      const cid = allColumns.colId[idx];
+      if (cid && refTable[cid] !== undefined) { return cid; }
+    }
+  }
+  if (typeof visRef === 'string' && visRef && refTable[visRef] !== undefined) { return visRef; }
+  const dispRef = rec.displayCol;
+  if (typeof dispRef === 'number' && dispRef > 0) {
+    const idx = allColumns.id.indexOf(dispRef);
+    const formula = idx !== -1 ? (allColumns.formula?.[idx] ?? null) : null;
+    if (typeof formula === 'string') {
+      const m = /\$\w+\.(\w+)$/.exec(formula.trim());
+      if (m && refTable[m[1]] !== undefined) { return m[1]; }
+    }
+  }
+  return null;
+}
+
+let drawFieldConfigsCache = null; // { key: string, configs: [...] }
+
+// Fetch column type/metadata for the given colIds in selectedTableId.
+// Returns [{colId, label, type, refOptions, choiceItems}].
+async function fetchDrawFieldConfigs(colIds) {
+  const key = colIds.join('\0');
+  if (drawFieldConfigsCache?.key === key) { return drawFieldConfigsCache.configs; }
+  if (!selectedTableId) {
+    return colIds.map(colId => ({ colId, label: colId, type: 'Text', refOptions: null, choiceItems: null }));
+  }
+  const [tables, allColumns] = await Promise.all([
+    grist.docApi.fetchTable('_grist_Tables'),
+    grist.docApi.fetchTable('_grist_Tables_column'),
+  ]);
+  const tableRef = tables.id[tables.tableId.indexOf(selectedTableId)];
+  const configs = [];
+  for (const colId of colIds) {
+    const idx = allColumns.id.findIndex((_, i) =>
+      allColumns.parentId[i] === tableRef && allColumns.colId[i] === colId);
+    if (idx === -1) {
+      configs.push({ colId, label: colId, type: 'Text', refOptions: null, choiceItems: null });
+      continue;
+    }
+    const type = allColumns.type[idx] || 'Text';
+    const label = allColumns.label[idx] || colId;
+    const rec = { widgetOptions: allColumns.widgetOptions[idx], displayCol: allColumns.displayCol?.[idx] };
+    const widgetOptions = safeParse(rec.widgetOptions);
+    let refOptions = null;
+    let choiceItems = null;
+    if (type.startsWith('Ref:') || type.startsWith('RefList:')) {
+      const refTableId = type.startsWith('Ref:') ? type.slice(4) : type.slice(8);
+      try {
+        const refTable = await grist.docApi.fetchTable(refTableId);
+        if (refTable?.id) {
+          const visColId = resolveRefDisplayColId(rec, allColumns, refTable);
+          const lblCol = (visColId && refTable[visColId]) || null;
+          refOptions = refTable.id
+            .map((id, j) => ({ id, label: String(lblCol?.[j] ?? id) }))
+            .filter(o => o.id > 0);
+        }
+      } catch (e) {
+        console.warn('Could not fetch ref table:', refTableId, e);
+      }
+    } else if (type === 'Choice' || type === 'ChoiceList') {
+      choiceItems = widgetOptions?.choices || [];
+    }
+    configs.push({ colId, label, type, refOptions, choiceItems });
+  }
+  drawFieldConfigsCache = { key, configs };
+  return configs;
+}
+
+// Show a modal form for the given field configs and return a Promise that resolves to
 // {colId: value, ...} on Save, or null if the user cancelled.
-function showDrawModal(colIds, colLabels) {
+function showDrawModal(fieldConfigs) {
   return new Promise((resolve) => {
     const existing = document.getElementById('draw-modal');
     if (existing) { existing.remove(); }
@@ -809,20 +891,85 @@ function showDrawModal(colIds, colLabels) {
     title.textContent = 'New shape';
     box.appendChild(title);
 
-    const inputs = {};
-    for (const colId of colIds) {
-      const label = colLabels[colId] || colId;
+    const inputEls = {}; // colId → input/select element
+
+    for (const cfg of fieldConfigs) {
       const row = document.createElement('div');
       row.className = 'draw-modal-row';
-      const lbl = document.createElement('label');
-      lbl.textContent = label;
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'draw-modal-input';
-      input.placeholder = label;
-      inputs[colId] = input;
-      row.appendChild(lbl);
-      row.appendChild(input);
+      const isRef     = cfg.type?.startsWith('Ref:');
+      const isRefList = cfg.type?.startsWith('RefList:');
+      const isBool    = cfg.type === 'Bool';
+      const isChoice     = cfg.type === 'Choice';
+      const isChoiceList = cfg.type === 'ChoiceList';
+      const isInt = cfg.type === 'Int' || cfg.type === 'Integer';
+      const isNum = cfg.type === 'Numeric';
+
+      if (isBool) {
+        const wrap = document.createElement('label');
+        wrap.className = 'draw-modal-checkbox-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        const span = document.createElement('span');
+        span.textContent = cfg.label;
+        wrap.appendChild(cb);
+        wrap.appendChild(span);
+        row.appendChild(wrap);
+        inputEls[cfg.colId] = cb;
+      } else {
+        const lbl = document.createElement('label');
+        lbl.textContent = cfg.label;
+        row.appendChild(lbl);
+        let el;
+        if ((isRef || isRefList) && cfg.refOptions) {
+          el = document.createElement('select');
+          el.className = 'draw-modal-input';
+          if (isRefList) {
+            el.multiple = true;
+            el.size = Math.min(cfg.refOptions.length + 1, 5);
+          } else {
+            const empty = document.createElement('option');
+            empty.value = '';
+            empty.textContent = '—';
+            el.appendChild(empty);
+          }
+          for (const opt of cfg.refOptions) {
+            const o = document.createElement('option');
+            o.value = opt.id;
+            o.textContent = opt.label;
+            el.appendChild(o);
+          }
+        } else if ((isChoice || isChoiceList) && cfg.choiceItems?.length) {
+          el = document.createElement('select');
+          el.className = 'draw-modal-input';
+          if (isChoiceList) {
+            el.multiple = true;
+            el.size = Math.min(cfg.choiceItems.length + 1, 5);
+          } else {
+            const empty = document.createElement('option');
+            empty.value = '';
+            empty.textContent = '—';
+            el.appendChild(empty);
+          }
+          for (const c of cfg.choiceItems) {
+            const o = document.createElement('option');
+            o.value = c;
+            o.textContent = c;
+            el.appendChild(o);
+          }
+        } else if (isInt || isNum) {
+          el = document.createElement('input');
+          el.type = 'number';
+          el.className = 'draw-modal-input';
+          el.placeholder = cfg.label;
+        } else {
+          el = document.createElement('input');
+          el.type = 'text';
+          el.className = 'draw-modal-input';
+          el.placeholder = cfg.label;
+        }
+        row.appendChild(el);
+        inputEls[cfg.colId] = el;
+      }
       box.appendChild(row);
     }
 
@@ -839,8 +986,32 @@ function showDrawModal(colIds, colLabels) {
 
     const doSave = () => {
       const values = {};
-      for (const [colId, input] of Object.entries(inputs)) {
-        if (input.value !== '') { values[colId] = input.value; }
+      for (const cfg of fieldConfigs) {
+        const el = inputEls[cfg.colId];
+        if (!el) { continue; }
+        const isRef     = cfg.type?.startsWith('Ref:');
+        const isRefList = cfg.type?.startsWith('RefList:');
+        const isBool    = cfg.type === 'Bool';
+        const isChoiceList = cfg.type === 'ChoiceList';
+        const isInt = cfg.type === 'Int' || cfg.type === 'Integer';
+        const isNum = cfg.type === 'Numeric';
+        if (isBool) {
+          values[cfg.colId] = el.checked;
+        } else if (isRefList) {
+          const ids = [...el.selectedOptions].map(o => Number(o.value)).filter(Boolean);
+          if (ids.length > 0) { values[cfg.colId] = ['L', ...ids]; }
+        } else if (isRef && cfg.refOptions) {
+          if (el.value) { values[cfg.colId] = Number(el.value); }
+        } else if (isChoiceList) {
+          const vals = [...el.selectedOptions].map(o => o.value);
+          if (vals.length > 0) { values[cfg.colId] = ['L', ...vals]; }
+        } else if (isInt) {
+          if (el.value !== '') { values[cfg.colId] = parseInt(el.value, 10); }
+        } else if (isNum) {
+          if (el.value !== '') { values[cfg.colId] = parseFloat(el.value); }
+        } else {
+          if (el.value !== '') { values[cfg.colId] = el.value; }
+        }
       }
       overlay.remove();
       resolve(values);
@@ -851,7 +1022,7 @@ function showDrawModal(colIds, colLabels) {
     saveBtn.onclick = doSave;
 
     overlay.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { doSave(); }
+      if (e.key === 'Enter' && e.target.tagName !== 'SELECT') { doSave(); }
       if (e.key === 'Escape') { doCancel(); }
     });
 
@@ -861,8 +1032,10 @@ function showDrawModal(colIds, colLabels) {
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 
-    // Focus first input on next tick (after DOM is painted)
-    setTimeout(() => Object.values(inputs)[0]?.focus(), 0);
+    setTimeout(() => {
+      const first = box.querySelector('input:not([type=checkbox]), select');
+      if (first) { first.focus(); }
+    }, 0);
   });
 }
 
@@ -1321,8 +1494,8 @@ async function updateMap(data, mappings) {
         : [];
       let extraValues = {};
       if (colIds.length > 0) {
-        const colLabels = await getAllColumnLabels();
-        extraValues = await showDrawModal(colIds, colLabels);
+        const fieldConfigs = await fetchDrawFieldConfigs(colIds);
+        extraValues = await showDrawModal(fieldConfigs);
         if (extraValues === null) { return; } // user cancelled
       }
       try {
