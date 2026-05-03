@@ -1219,6 +1219,32 @@ async function updateMap(data, mappings) {
     }
   }
 
+  if (isGeoJSONMode && writeAccess) {
+    const drawControl = new L.Control.Draw({
+      draw: {
+        polygon: true,
+        polyline: true,
+        rectangle: true,
+        marker: true,
+        circle: false,
+        circlemarker: false,
+      },
+      edit: false,
+    });
+    map.addControl(drawControl);
+
+    map.on('draw:created', async function(e) {
+      if (!selectedTableId || !mappings || !mappings[GeoJSON]) { return; }
+      try {
+        await grist.docApi.applyUserActions([['AddRecord', selectedTableId, null, {
+          [mappings[GeoJSON]]: JSON.stringify(e.layer.toGeoJSON()),
+        }]]);
+      } catch (err) {
+        console.error('Error saving drawn feature:', err);
+      }
+    });
+  }
+
   amap = map;
 
   makeSureSelectedMarkerIsShown();
