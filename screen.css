@@ -137,6 +137,10 @@ div.print a:hover {
   #settings {
     display: none !important;
   }
+  .leaflet-control-zoom,
+  .leaflet-control-layers {
+    display: none !important;
+  }
   #map {
     width: 100vw !important;
     height: 100vh !important;
