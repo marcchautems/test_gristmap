@@ -1,6 +1,6 @@
 # Grist Map Widget
 
-A custom [Grist](https://www.getgrist.com/) widget that displays a Leaflet map from data stored in a Grist table. Supports GeoJSON geometries (polygons, lines, points, multipolygons), coordinate-based markers, layer grouping, permanent labels, and additional read-only layers from other tables.
+A custom [Grist](https://www.getgrist.com/) widget that displays a Leaflet map from data stored in a Grist table. Supports GeoJSON geometries (polygons, lines, points, multipolygons), coordinate-based markers, layer grouping, permanent labels, additional read-only layers from other tables, and interactive drawing/editing of shapes directly on the map.
 
 ---
 
@@ -23,8 +23,10 @@ A custom [Grist](https://www.getgrist.com/) widget that displays a Leaflet map f
 | **Style** | Text | No | JSON style for GeoJSON features (see below) |
 | **Layer** | Text | No | Groups features into named, toggleable overlays |
 | **Popup** | Any | No | One or more columns to display in the click popup (supports multiple) |
+| **Tooltip** | Any | No | One or more columns to display in the hover tooltip (GeoJSON mode only, supports multiple) |
 | **Label** | Text | No | Permanent text label displayed on the feature |
 | **LabelStyle** | Text | No | JSON style for the label (see below) |
+| **Fields to fill on new shape** | Any | No | Columns prompted when a new shape is drawn on the map (supports multiple) |
 | **Geocode** | Bool | No | Set to true to trigger geocoding for that row |
 | **Address** | Text | No | Address to geocode |
 | **GeocodedAddress** | Text | No | Cache field — stores the last geocoded address to avoid redundant lookups |
@@ -119,9 +121,36 @@ When the `Layer` column is mapped, features are grouped by their `Layer` value i
 
 ---
 
+## Drawing and Editing Shapes
+
+When the **GeoJSON** column is mapped and the widget has write access, a draw toolbar can be enabled from the settings panel. It allows creating, editing, and optionally deleting shapes directly on the map.
+
+### Creating a shape
+
+1. Enable **Show draw toolbar** in the settings panel.
+2. Select a draw tool (polygon, rectangle, polyline, or marker).
+3. Draw the shape on the map.
+4. If **Fields to fill on new shape** columns are mapped, a form appears — fill in any values and click **Save**. Fields left blank are not written.
+5. A new record is added to the Grist table with the geometry stored in the `GeoJSON` column.
+
+### Editing a shape
+
+1. Click the pencil (edit) button in the toolbar.
+2. Drag vertices to reshape features.
+3. Click **Save** — the updated geometry is written back to the `GeoJSON` column of the corresponding record.
+4. Click **Cancel** to discard changes.
+
+### Deleting a shape
+
+Enable **Show delete toolbar** in the settings panel to add a trash-can button. Selecting and confirming a deletion removes the record from the Grist table.
+
+> **Note:** Circles are not supported as a draw type — GeoJSON has no native circle geometry. Use polygons or markers instead.
+
+---
+
 ## Additional Layers from Other Tables
 
-Read-only GeoJSON layers from other Grist tables can be added via the widget settings panel (click the wrench icon in the Grist toolbar).
+Read-only GeoJSON layers from other Grist tables can be added via the widget settings panel.
 
 Paste a JSON array into the **Additional layers** field:
 
@@ -133,10 +162,13 @@ Paste a JSON array into the **Additional layers** field:
     "columns": {
       "GeoJSON": "geom",
       "Name": "parcel_id",
-      "Style": "style"
+      "Style": "style",
+      "Label": "label_col",
+      "LabelStyle": "label_style_col"
     },
     "order": 0,
-    "interactive": true
+    "interactive": true,
+    "filter": "is_active"
   },
   {
     "table": "Roads",
@@ -145,22 +177,51 @@ Paste a JSON array into the **Additional layers** field:
       "GeoJSON": "geometry"
     },
     "order": 1,
-    "interactive": false
+    "interactive": false,
+    "filter": [
+      {"col": "status", "op": "==", "val": "open"},
+      {"col": "road_class", "op": "!=", "val": "track"}
+    ]
   }
 ]
 ```
 
 | Property | Required | Description |
 |---|---|---|
-| `table` | Yes | Grist table ID (the internal ID, visible in the URL or table settings) |
+| `table` | Yes | Grist table ID (visible in the URL or table settings) |
 | `layer` | No | Display name in the layer control (defaults to the table ID) |
 | `columns.GeoJSON` | Yes | Column ID containing GeoJSON geometry strings |
 | `columns.Name` | No | Column ID for popup label when `interactive` is true |
 | `columns.Style` | No | Column ID for JSON style (same format as the main `Style` column) |
+| `columns.Label` | No | Column ID for permanent text labels |
+| `columns.LabelStyle` | No | Column ID for label style JSON |
 | `order` | No | Drawing order — lower values are drawn first (behind). Default: `0` |
 | `interactive` | No | If `false`, clicks pass through and no popup is shown. Default: `true` |
+| `filter` | No | Row filter — see below |
 
-Additional layers appear as standalone overlays in the layer control alongside the main table layers.
+### Filtering rows in additional layers
+
+The `filter` property controls which rows are included. Three forms are accepted:
+
+**Boolean column** — include rows where the column value is truthy:
+```json
+"filter": "is_active"
+```
+
+**Single condition:**
+```json
+"filter": [{"col": "status", "op": "==", "val": "active"}]
+```
+
+**Multiple conditions (all must pass — AND logic):**
+```json
+"filter": [
+  {"col": "status", "op": "==", "val": "active"},
+  {"col": "area",   "op": ">",  "val": 100}
+]
+```
+
+Supported operators: `==` `!=` `>` `>=` `<` `<=` `contains` `startsWith`
 
 ---
 
@@ -171,9 +232,13 @@ Open the settings panel via the wrench icon:
 | Setting | Description |
 |---|---|
 | **All locations / Single** | Toggle between showing all rows or only the currently selected row |
+| **Show print button** | Show a Print button fixed to the bottom-left corner of the map (hidden by default) |
+| **Show draw toolbar** | Show the Leaflet.draw toolbar for creating and editing shapes (hidden by default; GeoJSON mode + write access required) |
+| **Show delete toolbar** | Add a delete button to the draw toolbar to remove shapes and their Grist records (hidden by default) |
 | **Source** | Tile layer URL template (default: OpenStreetMap). See [Leaflet providers](https://leaflet-extras.github.io/leaflet-providers/preview/) for alternatives |
 | **Copyright** | Attribution text shown on the map |
 | **Additional layers** | JSON config for layers from other tables (see above) |
+| **Layer order & default visibility** | JSON object mapping layer names to initial visibility. Also controls draw order (first key = topmost). Example: `{"Layer A": true, "Layer B": false}` |
 
 **Example tile source for high-zoom satellite imagery (ESRI):**
 ```
@@ -186,6 +251,7 @@ Attribution: `Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, 
 ## Dependencies
 
 - [Leaflet 1.6.0](https://leafletjs.com/)
+- [Leaflet.draw 1.0.4](https://github.com/Leaflet/Leaflet.draw)
 - [Leaflet.markercluster 1.5.3](https://github.com/Leaflet/Leaflet.markercluster)
 - [Leaflet Control Geocoder 3.1.0](https://github.com/perliedman/leaflet-control-geocoder)
 - [DOMPurify 3.2.3](https://github.com/cure53/DOMPurify)

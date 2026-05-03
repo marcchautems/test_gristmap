@@ -431,6 +431,35 @@ function parseGristJson(raw) {
   return null;
 }
 
+// Evaluate a single filter condition against a cell value.
+function evaluateCondition(rowVal, op, condVal) {
+  switch (op) {
+    case '==':         return rowVal == condVal;
+    case '!=':         return rowVal != condVal;
+    case '>':          return rowVal > condVal;
+    case '>=':         return rowVal >= condVal;
+    case '<':          return rowVal < condVal;
+    case '<=':         return rowVal <= condVal;
+    case 'contains':   return String(rowVal ?? '').includes(String(condVal));
+    case 'startsWith': return String(rowVal ?? '').startsWith(String(condVal));
+    default:           return true;
+  }
+}
+
+// Returns true if row i passes the filter.
+// filter can be: null (pass all), a string (boolean column name), or an array of
+// {col, op, val} conditions (all must pass — AND logic).
+function evaluateRowFilter(tableData, i, filter) {
+  if (!filter) { return true; }
+  if (typeof filter === 'string') {
+    return !tableData[filter] || !!tableData[filter][i];
+  }
+  if (Array.isArray(filter)) {
+    return filter.every(cond => evaluateCondition(tableData[cond.col]?.[i], cond.op, cond.val));
+  }
+  return true;
+}
+
 // Fetch additional layers from other Grist tables based on config
 async function fetchAdditionalLayers() {
   const results = [];
@@ -451,13 +480,11 @@ async function fetchAdditionalLayers() {
       const styleCol = config.columns.Style;
       const labelCol = config.columns.Label || null;
       const labelStyleCol = config.columns.LabelStyle || null;
-      const filterCol = config.filter || null;
+      const filter = config.filter || null;
       const features = [];
       for (let i = 0; i < tableData.id.length; i++) {
         // Skip row if filter column is specified and its value is falsy
-        if (filterCol && tableData[filterCol]) {
-          if (!tableData[filterCol][i]) { continue; }
-        }
+        if (!evaluateRowFilter(tableData, i, filter)) { continue; }
         const geojsonRaw = tableData[geojsonCol] ? tableData[geojsonCol][i] : null;
         if (!geojsonRaw) { continue; }
         let parsedGeoJSON;
