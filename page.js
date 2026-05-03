@@ -790,6 +790,82 @@ function buildLabelHtml(text, opts, fontSizeOverride) {
     : htmlText;
 }
 
+// Show a modal form for the given column IDs and return a Promise that resolves to
+// {colId: value, ...} on Save, or null if the user cancelled.
+function showDrawModal(colIds, colLabels) {
+  return new Promise((resolve) => {
+    const existing = document.getElementById('draw-modal');
+    if (existing) { existing.remove(); }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'draw-modal';
+    overlay.className = 'draw-modal-overlay';
+
+    const box = document.createElement('div');
+    box.className = 'draw-modal-box';
+
+    const title = document.createElement('div');
+    title.className = 'draw-modal-title';
+    title.textContent = 'New shape';
+    box.appendChild(title);
+
+    const inputs = {};
+    for (const colId of colIds) {
+      const label = colLabels[colId] || colId;
+      const row = document.createElement('div');
+      row.className = 'draw-modal-row';
+      const lbl = document.createElement('label');
+      lbl.textContent = label;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'draw-modal-input';
+      input.placeholder = label;
+      inputs[colId] = input;
+      row.appendChild(lbl);
+      row.appendChild(input);
+      box.appendChild(row);
+    }
+
+    const buttons = document.createElement('div');
+    buttons.className = 'draw-modal-buttons';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.className = 'draw-modal-cancel';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = 'Save';
+    saveBtn.className = 'draw-modal-save';
+
+    const doSave = () => {
+      const values = {};
+      for (const [colId, input] of Object.entries(inputs)) {
+        if (input.value !== '') { values[colId] = input.value; }
+      }
+      overlay.remove();
+      resolve(values);
+    };
+    const doCancel = () => { overlay.remove(); resolve(null); };
+
+    cancelBtn.onclick = doCancel;
+    saveBtn.onclick = doSave;
+
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { doSave(); }
+      if (e.key === 'Escape') { doCancel(); }
+    });
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(saveBtn);
+    box.appendChild(buttons);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    // Focus first input on next tick (after DOM is painted)
+    setTimeout(() => Object.values(inputs)[0]?.focus(), 0);
+  });
+}
+
 // Function to clear last added markers. Used to clear the map when new record is selected.
 let clearMarkers = () => {};
 let clearGeoJSONLayers = () => {};
@@ -1238,18 +1314,22 @@ async function updateMap(data, mappings) {
 
     map.on('draw:created', async function(e) {
       if (!selectedTableId || !mappings || !mappings[GeoJSON]) { return; }
-      const record = { [mappings[GeoJSON]]: JSON.stringify(e.layer.toGeoJSON().geometry) };
+      const geojsonStr = JSON.stringify(e.layer.toGeoJSON().geometry);
       const fieldMappings = (NewShapeFields in mappings) ? mappings[NewShapeFields] : null;
-      if (fieldMappings) {
-        const colIds = Array.isArray(fieldMappings) ? fieldMappings : [fieldMappings];
+      const colIds = fieldMappings
+        ? (Array.isArray(fieldMappings) ? fieldMappings : [fieldMappings]).filter(Boolean)
+        : [];
+      let extraValues = {};
+      if (colIds.length > 0) {
         const colLabels = await getAllColumnLabels();
-        for (const colId of colIds) {
-          const val = window.prompt((colLabels[colId] || colId) + ':');
-          if (val !== null) { record[colId] = val; }
-        }
+        extraValues = await showDrawModal(colIds, colLabels);
+        if (extraValues === null) { return; } // user cancelled
       }
       try {
-        await grist.docApi.applyUserActions([['AddRecord', selectedTableId, null, record]]);
+        await grist.docApi.applyUserActions([['AddRecord', selectedTableId, null, {
+          [mappings[GeoJSON]]: geojsonStr,
+          ...extraValues,
+        }]]);
       } catch (err) {
         console.error('Error saving drawn feature:', err);
       }
