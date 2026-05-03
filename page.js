@@ -1237,7 +1237,7 @@ async function updateMap(data, mappings) {
       if (!selectedTableId || !mappings || !mappings[GeoJSON]) { return; }
       try {
         await grist.docApi.applyUserActions([['AddRecord', selectedTableId, null, {
-          [mappings[GeoJSON]]: JSON.stringify(e.layer.toGeoJSON()),
+          [mappings[GeoJSON]]: JSON.stringify(e.layer.toGeoJSON().geometry),
         }]]);
       } catch (err) {
         console.error('Error saving drawn feature:', err);
