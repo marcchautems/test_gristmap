@@ -42,6 +42,11 @@ let lastRecords;
 let rawRecordsById = {};
 let additionalLayersConfig = [];
 let lastKnownMappings = null; // cache last non-null mappings (Grist may send null on data-only updates)
+let showPrintButton = true;
+
+function applyPrintButtonVisibility() {
+  document.querySelector('div.print').style.display = showPrintButton ? '' : 'none';
+}
 
 
 //Color markers downloaded from leaflet repo, color-shifted to green
@@ -1457,6 +1462,13 @@ function onEditOptions() {
       updateMode();
     }
   }
+  const cbxPrint = document.getElementById('cbxPrintButton');
+  cbxPrint.checked = showPrintButton;
+  cbxPrint.onchange = async (e) => {
+    showPrintButton = e.target.checked;
+    await grist.setOption('showPrintButton', showPrintButton);
+    applyPrintButtonVisibility();
+  };
   [ "mapSource", "mapCopyright" ].forEach((opt) => {
     const ipt = document.getElementById(opt)
     ipt.onchange = async (e) => {
@@ -1555,6 +1567,8 @@ grist.onOptions((options, interaction) => {
   if (newMode != mode && lastRecords) {
     updateMode();
   }
+  showPrintButton = options?.showPrintButton ?? true;
+  applyPrintButtonVisibility();
   const newSource = options?.mapSource ?? mapSource;
   mapSource = newSource;
   document.getElementById("mapSource").value = mapSource;
