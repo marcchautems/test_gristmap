@@ -43,6 +43,7 @@ let rawRecordsById = {};
 let additionalLayersConfig = [];
 let lastKnownMappings = null; // cache last non-null mappings (Grist may send null on data-only updates)
 let showPrintButton = true;
+let showDrawToolbar = true;
 
 function applyPrintButtonVisibility() {
   document.querySelector('div.print').style.display = showPrintButton ? '' : 'none';
@@ -1219,7 +1220,7 @@ async function updateMap(data, mappings) {
     }
   }
 
-  if (isGeoJSONMode && writeAccess) {
+  if (isGeoJSONMode && writeAccess && showDrawToolbar) {
     const drawControl = new L.Control.Draw({
       draw: {
         polygon: true,
@@ -1495,6 +1496,12 @@ function onEditOptions() {
     await grist.setOption('showPrintButton', showPrintButton);
     applyPrintButtonVisibility();
   };
+  const cbxDraw = document.getElementById('cbxDrawToolbar');
+  cbxDraw.checked = showDrawToolbar;
+  cbxDraw.onchange = async (e) => {
+    showDrawToolbar = e.target.checked;
+    await grist.setOption('showDrawToolbar', showDrawToolbar);
+  };
   [ "mapSource", "mapCopyright" ].forEach((opt) => {
     const ipt = document.getElementById(opt)
     ipt.onchange = async (e) => {
@@ -1595,6 +1602,7 @@ grist.onOptions((options, interaction) => {
   }
   showPrintButton = options?.showPrintButton ?? true;
   applyPrintButtonVisibility();
+  showDrawToolbar = options?.showDrawToolbar ?? true;
   const newSource = options?.mapSource ?? mapSource;
   mapSource = newSource;
   document.getElementById("mapSource").value = mapSource;
