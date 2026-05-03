@@ -900,6 +900,29 @@ async function fetchDrawFieldConfigs(colIds) {
   return configs;
 }
 
+// Build a L.divIcon that renders as a styled SVG circle, used for Point features
+// so they are draggable in Leaflet.draw edit mode (L.Marker supports dragging; L.CircleMarker does not).
+function makePointIcon(style, selected) {
+  const r = style.radius || 8;
+  const weight = style.weight != null ? style.weight : 3;
+  const color = selected ? '#16B378' : (style.color || '#3388ff');
+  const fillColor = selected ? '#16B378' : (style.fillColor || color);
+  const fillOpacity = selected ? 0.6 : (style.fillOpacity != null ? style.fillOpacity : 0.3);
+  const opacity = style.opacity != null ? style.opacity : 1;
+  const d = (r + weight) * 2;
+  return L.divIcon({
+    className: '',
+    html: '<svg width="' + d + '" height="' + d + '" xmlns="http://www.w3.org/2000/svg">' +
+      '<circle cx="' + (d / 2) + '" cy="' + (d / 2) + '" r="' + r + '"' +
+      ' stroke="' + color + '" stroke-width="' + weight + '"' +
+      ' fill="' + fillColor + '" fill-opacity="' + fillOpacity + '"' +
+      ' opacity="' + opacity + '"/></svg>',
+    iconSize: [d, d],
+    iconAnchor: [d / 2, d / 2],
+    popupAnchor: [0, -(d / 2)],
+  });
+}
+
 // Show a modal form for the given field configs and return a Promise that resolves to
 // {colId: value, ...} on Save, or null if the user cancelled.
 function showDrawModal(fieldConfigs) {
@@ -1274,12 +1297,12 @@ async function updateMap(data, mappings) {
       // Create GeoJSON layer
       const layer = L.geoJSON(parsedGeoJSON, {
         style: Object.assign({
-          radius: 8,
           opacity: id == selectedRowId ? 0.6 : 0.3,
           fillOpacity: id == selectedRowId ? 0.6 : 0.3,
         }, customStyle),
         pointToLayer: function (feature, latlng) {
-          return L.circleMarker(latlng, {
+          return L.marker(latlng, {
+            icon: makePointIcon(customStyle, id == selectedRowId),
             pane: id == selectedRowId ? "selectedMarker" : "otherMarkers",
           });
         },
@@ -1601,6 +1624,9 @@ function clearPopupMarker() {
         opacity: 0.3,
         fillOpacity: 0.3,
       }, prevStyle));
+      marker.eachLayer(function (l) {
+        if (l.setIcon) { l.setIcon(makePointIcon(prevStyle, false)); }
+      });
     }
   }
 }
@@ -1642,7 +1668,7 @@ function selectGeoJSONFeature(id) {
     }, prevStyle));
     previouslyClicked.eachLayer(function (layer) {
       if (layer.setIcon) {
-        layer.setIcon(defaultIcon);
+        layer.setIcon(makePointIcon(geoJSONStyles[selectedRowId] || {}, false));
       }
     });
   }
@@ -1663,7 +1689,7 @@ function selectGeoJSONFeature(id) {
   }, newStyle));
   layer.eachLayer(function (l) {
     if (l.setIcon) {
-      l.setIcon(selectedIcon);
+      l.setIcon(makePointIcon(newStyle, true));
     }
   });
 
