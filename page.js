@@ -1274,12 +1274,12 @@ async function updateMap(data, mappings) {
       // Create GeoJSON layer
       const layer = L.geoJSON(parsedGeoJSON, {
         style: Object.assign({
+          radius: 8,
           opacity: id == selectedRowId ? 0.6 : 0.3,
           fillOpacity: id == selectedRowId ? 0.6 : 0.3,
         }, customStyle),
         pointToLayer: function (feature, latlng) {
-          return L.marker(latlng, {
-            icon: id == selectedRowId ? selectedIcon : defaultIcon,
+          return L.circleMarker(latlng, {
             pane: id == selectedRowId ? "selectedMarker" : "otherMarkers",
           });
         },
@@ -1423,7 +1423,10 @@ async function updateMap(data, mappings) {
         for (const feat of layerConfig.features) {
           const featLayer = L.geoJSON(feat.geojson, {
             interactive: layerConfig.interactive,
-            style: Object.assign({ opacity: 0.5, fillOpacity: 0.3 }, feat.style),
+            style: Object.assign({ radius: 8, opacity: 0.5, fillOpacity: 0.3 }, feat.style),
+            pointToLayer: function (feature, latlng) {
+              return L.circleMarker(latlng);
+            },
             onEachFeature: function (_feature, layer) {
               if (layerConfig.interactive && feat.name) {
                 layer.bindPopup(DOMPurify.sanitize(String(feat.name)));
