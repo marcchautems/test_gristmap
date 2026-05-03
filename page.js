@@ -35,6 +35,8 @@ const Popup = 'Popup';
 const Tooltip = 'Tooltip';
 // Optional - permanent text label displayed on the feature
 const Label = 'Label';
+// Optional - columns to prompt for when saving a newly drawn shape
+const NewShapeFields = 'NewShapeFields';
 // Optional - JSON style for the label (bearing, fontSize, color, fontWeight, dynamicSize, minZoom, maxZoom, opacity)
 const LabelStyle = 'LabelStyle';
 let lastRecord;
@@ -1236,10 +1238,18 @@ async function updateMap(data, mappings) {
 
     map.on('draw:created', async function(e) {
       if (!selectedTableId || !mappings || !mappings[GeoJSON]) { return; }
+      const record = { [mappings[GeoJSON]]: JSON.stringify(e.layer.toGeoJSON().geometry) };
+      const fieldMappings = (NewShapeFields in mappings) ? mappings[NewShapeFields] : null;
+      if (fieldMappings) {
+        const colIds = Array.isArray(fieldMappings) ? fieldMappings : [fieldMappings];
+        const colLabels = await getAllColumnLabels();
+        for (const colId of colIds) {
+          const val = window.prompt((colLabels[colId] || colId) + ':');
+          if (val !== null) { record[colId] = val; }
+        }
+      }
       try {
-        await grist.docApi.applyUserActions([['AddRecord', selectedTableId, null, {
-          [mappings[GeoJSON]]: JSON.stringify(e.layer.toGeoJSON().geometry),
-        }]]);
+        await grist.docApi.applyUserActions([['AddRecord', selectedTableId, null, record]]);
       } catch (err) {
         console.error('Error saving drawn feature:', err);
       }
@@ -1587,6 +1597,14 @@ grist.ready({
       title: "Label Style",
       optional,
       description: 'JSON style for labels. Supported properties: bearing (rotation degrees), fontSize (px), lineHeight (e.g. 1.4), color, fontWeight, opacity, dynamicSize (bool), referenceZoom (for dynamic sizing), minZoom, maxZoom.',
+    },
+    {
+      name: "NewShapeFields",
+      type: "Any",
+      title: "Fields to fill on new shape",
+      optional,
+      allowMultiple: true,
+      description: "Columns to prompt for when a new shape is drawn on the map.",
     },
   ],
   allowSelectBy: true,
