@@ -1207,8 +1207,11 @@ async function updateMap(data, mappings) {
     }
   }
 
+  let editableGroup = null;
   if (isGeoJSONMode) {
     // GeoJSON mode — group features by Layer column value
+    editableGroup = L.featureGroup();
+    map.addLayer(editableGroup);
 
     for (const rec of data) {
       const { id, name, geojson, style: rawStyle, layer: layerName, label, labelStyle } = getInfo(rec);
@@ -1253,6 +1256,8 @@ async function updateMap(data, mappings) {
           });
         },
         onEachFeature: function (feature, layer) {
+          layer._gristRowId = id;
+          editableGroup.addLayer(layer);
           const popupHtml = buildPopupContent(name, rawRecordsById[id], mappings, colLabels);
           layer.bindPopup(popupHtml);
           const tooltipHtml = buildTooltipContent(name, rawRecordsById[id], mappings, colLabels);
@@ -1481,9 +1486,28 @@ async function updateMap(data, mappings) {
         circle: false,
         circlemarker: false,
       },
-      edit: false,
+      edit: {
+        featureGroup: editableGroup,
+      },
     });
     map.addControl(drawControl);
+
+    map.on('draw:edited', async function(e) {
+      const actions = [];
+      e.layers.eachLayer(function(layer) {
+        const rowId = layer._gristRowId;
+        if (!rowId || !selectedTableId || !mappings || !mappings[GeoJSON]) { return; }
+        actions.push(['UpdateRecord', selectedTableId, rowId, {
+          [mappings[GeoJSON]]: JSON.stringify(layer.toGeoJSON().geometry),
+        }]);
+      });
+      if (actions.length === 0) { return; }
+      try {
+        await grist.docApi.applyUserActions(actions);
+      } catch (err) {
+        console.error('Error saving edited features:', err);
+      }
+    });
 
     map.on('draw:created', async function(e) {
       if (!selectedTableId || !mappings || !mappings[GeoJSON]) { return; }
