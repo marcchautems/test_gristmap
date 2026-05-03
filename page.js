@@ -44,8 +44,9 @@ let lastRecords;
 let rawRecordsById = {};
 let additionalLayersConfig = [];
 let lastKnownMappings = null; // cache last non-null mappings (Grist may send null on data-only updates)
-let showPrintButton = true;
-let showDrawToolbar = true;
+let showPrintButton = false;
+let showDrawToolbar = false;
+let showDeleteToolbar = false;
 
 function applyPrintButtonVisibility() {
   document.querySelector('div.print').style.display = showPrintButton ? '' : 'none';
@@ -1488,9 +1489,25 @@ async function updateMap(data, mappings) {
       },
       edit: {
         featureGroup: editableGroup,
+        remove: showDeleteToolbar ? {} : false,
       },
     });
     map.addControl(drawControl);
+
+    map.on('draw:deleted', async function(e) {
+      const actions = [];
+      e.layers.eachLayer(function(layer) {
+        const rowId = layer._gristRowId;
+        if (!rowId || !selectedTableId) { return; }
+        actions.push(['RemoveRecord', selectedTableId, rowId]);
+      });
+      if (actions.length === 0) { return; }
+      try {
+        await grist.docApi.applyUserActions(actions);
+      } catch (err) {
+        console.error('Error deleting features:', err);
+      }
+    });
 
     map.on('draw:edited', async function(e) {
       const actions = [];
@@ -1789,6 +1806,12 @@ function onEditOptions() {
     showDrawToolbar = e.target.checked;
     await grist.setOption('showDrawToolbar', showDrawToolbar);
   };
+  const cbxDelete = document.getElementById('cbxDeleteToolbar');
+  cbxDelete.checked = showDeleteToolbar;
+  cbxDelete.onchange = async (e) => {
+    showDeleteToolbar = e.target.checked;
+    await grist.setOption('showDeleteToolbar', showDeleteToolbar);
+  };
   [ "mapSource", "mapCopyright" ].forEach((opt) => {
     const ipt = document.getElementById(opt)
     ipt.onchange = async (e) => {
@@ -1895,9 +1918,10 @@ grist.onOptions((options, interaction) => {
   if (newMode != mode && lastRecords) {
     updateMode();
   }
-  showPrintButton = options?.showPrintButton ?? true;
+  showPrintButton = options?.showPrintButton ?? false;
   applyPrintButtonVisibility();
-  showDrawToolbar = options?.showDrawToolbar ?? true;
+  showDrawToolbar = options?.showDrawToolbar ?? false;
+  showDeleteToolbar = options?.showDeleteToolbar ?? false;
   const newSource = options?.mapSource ?? mapSource;
   mapSource = newSource;
   document.getElementById("mapSource").value = mapSource;
