@@ -1262,7 +1262,6 @@ async function updateMap(data, mappings) {
   if (isGeoJSONMode) {
     // GeoJSON mode — group features by Layer column value
     editableGroup = L.featureGroup();
-    map.addLayer(editableGroup);
 
     for (const rec of data) {
       const { id, name, geojson, style: rawStyle, layer: layerName, label, labelStyle } = getInfo(rec);
