@@ -1796,17 +1796,19 @@ grist.onRecords((data, mappings) => {
   // explicitly and doesn't depend on grist.mapColumnNames's internal _mappings state, which
   // Grist may clear to null on data-only updates (causing mapColumnNames to return null or
   // raw data with undefined values for virtual column names).
-  lastRecords = manualMapData(data, effectiveMappings) || grist.mapColumnNames(data) || data;
+  const newMapped = manualMapData(data, effectiveMappings) || grist.mapColumnNames(data) || data;
   if (mode !== 'single') {
-    // If mappings are not done, we will assume that table has correct columns.
-    // This is done to support existing widgets which where configured by
-    // renaming column names.
-    updateMap(lastRecords, effectiveMappings);
-    if (lastRecord) {
-      selectOnMap(lastRecord, effectiveMappings);
+    const mapDataChanged = JSON.stringify(newMapped) !== JSON.stringify(lastRecords);
+    lastRecords = newMapped;
+    if (mapDataChanged) {
+      updateMap(lastRecords, effectiveMappings);
+      if (lastRecord) {
+        selectOnMap(lastRecord, effectiveMappings);
+      }
     }
-    // We need to mimic the mappings for old widgets
     scanOnNeed(defaultMapping(data[0], effectiveMappings));
+  } else {
+    lastRecords = newMapped;
   }
 });
 
